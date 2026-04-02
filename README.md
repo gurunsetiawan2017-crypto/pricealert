@@ -28,7 +28,27 @@ In practice, the first versions focus on:
 
 ## Current Status
 
-This repository is currently in the planning and architecture phase.
+This repository is no longer only in planning.
+
+The current branch already includes a working v1 foundation for:
+- MariaDB bootstrap, migrations, and repositories
+- grouped listing pipeline
+- snapshot and price history creation
+- alert evaluation with anti-spam
+- single-keyword scan orchestration
+- single-process scheduler/worker runtime
+- Tokopedia scraper feasibility adapter
+- DTO/query layer
+- Bubble Tea TUI dashboard/detail flow
+- tracked keyword add/edit/pause/resume/archive flows
+- Telegram notifier foundation
+- startup reconciliation and bounded startup maintenance
+
+What is still intentionally incomplete:
+- scraper hardening beyond the current feasibility adapter
+- broader operational polish and observability improvements
+- future API/web interface work
+- any multi-user or multi-marketplace support
 
 The docs directory contains the source-of-truth design documents for:
 - product scope
@@ -75,6 +95,81 @@ The docs directory contains the source-of-truth design documents for:
 - local scheduler/worker runtime
 - TUI dashboard and detail views
 - Telegram alert integration
+
+Most of this scope is now implemented in foundation form on the active development branch.
+The remaining work is primarily hardening, maintenance, and operational refinement.
+
+## Running Locally
+
+### Prerequisites
+
+- Go installed locally
+- MariaDB running locally or reachable from your machine
+- a database created for this app, for example `pricealert`
+
+### 1. Set environment variables
+
+The app is environment-driven. A minimal local setup looks like:
+
+```bash
+export PRICEALERT_DB_HOST=127.0.0.1
+export PRICEALERT_DB_PORT=3306
+export PRICEALERT_DB_USER=root
+export PRICEALERT_DB_PASSWORD=password
+export PRICEALERT_DB_NAME=pricealert
+```
+
+Optional but commonly useful:
+
+```bash
+export PRICEALERT_MIN_SCAN_INTERVAL_MINS=5
+export PRICEALERT_MAX_CONCURRENT_SCANS=1
+export PRICEALERT_RAW_LISTING_RETENTION_HOURS=336
+export PRICEALERT_ALERT_EVENT_RETENTION_HOURS=720
+```
+
+Telegram is optional. Only set both of these if you want outbound alerts enabled:
+
+```bash
+export PRICEALERT_TELEGRAM_BOT_TOKEN=...
+export PRICEALERT_TELEGRAM_CHAT_ID=...
+```
+
+### 2. Apply the SQL migrations
+
+At the moment the app expects the schema to already exist. Apply:
+
+- [migrations/001_init.sql](/home/iwan/Project/pricealert/migrations/001_init.sql)
+- [migrations/002_price_points.sql](/home/iwan/Project/pricealert/migrations/002_price_points.sql)
+
+Example with MariaDB client:
+
+```bash
+mariadb -h127.0.0.1 -uroot -ppassword pricealert < migrations/001_init.sql
+mariadb -h127.0.0.1 -uroot -ppassword pricealert < migrations/002_price_points.sql
+```
+
+Adjust host/user/password/database to match your local setup.
+
+### 3. Run the app
+
+From the repository root:
+
+```bash
+go run ./cmd/pricealert
+```
+
+This starts the single-process local app:
+- Bubble Tea TUI
+- bounded runtime scheduler/worker
+- Tokopedia scraper feasibility adapter
+- startup reconciliation and startup-bounded maintenance
+
+### Notes
+
+- if Telegram config is omitted, the app still runs and uses a no-op notifier
+- startup maintenance may reconcile abandoned `running` scan jobs and prune old raw listings / alert events
+- the Tokopedia adapter is still a feasibility adapter, so scraper behavior may need further hardening
 
 ## Recommended Build Order
 

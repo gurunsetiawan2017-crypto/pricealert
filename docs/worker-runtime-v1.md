@@ -125,16 +125,31 @@ Do not implement these now unless truly needed.
 
 1. application starts
 2. establish DB connection
-3. load tracked keywords with status `active` or `paused`
-4. initialize in-memory scheduler state
-5. load recent snapshots and events for dashboard rendering
-6. start scheduler loop
-7. start TUI event loop
+3. reconcile abandoned `running` scan jobs from a previous interrupted app run
+4. run bounded startup maintenance such as retention pruning
+5. load tracked keywords with status `active` or `paused`
+6. initialize in-memory scheduler state
+7. load recent snapshots and events for dashboard rendering
+8. start scheduler loop or expose bounded runtime trigger
+9. start TUI event loop
 
 ### Startup goals
 - app should become usable quickly
 - UI should not block until all scans complete
 - existing persisted state should be visible immediately
+- startup recovery should leave no ambiguous `running` scan jobs behind
+
+### Conservative startup maintenance guidance
+v1 should keep startup maintenance explicit and bounded.
+
+Recommended examples:
+- mark stale `scan_jobs.status = running` as failed with a clear reconciliation reason
+- prune old `raw_listings` by age
+- optionally prune older `alert_events` by age
+
+Avoid:
+- hidden background housekeeping loops
+- aggressive cleanup of data still useful to current dashboard/detail behavior
 
 ### Recommendation
 Show last known state first, then allow fresh scans to update it asynchronously.
@@ -156,6 +171,11 @@ When the user exits:
 
 ### Important note
 If graceful shutdown takes too long, the app may allow a timeout and exit with clear logs.
+
+### Recommended v1 behavior
+- stop accepting new work first
+- let in-flight scans finish within a bounded timeout where practical
+- close DB only after worker shutdown is complete or timed out
 
 ---
 
@@ -227,6 +247,18 @@ For example:
 - 1 to 3 concurrent keyword scans globally
 
 The exact number depends on scraper reliability and request behavior.
+
+### Runtime status surfacing
+The app may expose a lightweight runtime summary to dashboard consumers.
+
+Useful fields include:
+- whether runtime is accepting new work
+- current running scan count
+- configured max concurrency
+- startup reconciliation count
+- startup pruning counts
+
+This should remain a concise operational summary, not a full monitoring subsystem.
 
 ---
 
