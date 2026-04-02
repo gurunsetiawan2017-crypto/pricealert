@@ -42,7 +42,6 @@ type MarketSnapshotRepository interface {
 type PricePointRepository interface {
 	Create(context.Context, domain.PricePoint) error
 	ListRecentByKeywordID(context.Context, string, int) ([]domain.PricePoint, error)
-	PruneOlderThanRecordedAt(context.Context, time.Time) (int, error)
 }
 
 type AlertRuleRepository interface {

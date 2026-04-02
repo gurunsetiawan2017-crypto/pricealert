@@ -705,9 +705,6 @@ func formatRuntimeStatus(status *dto.RuntimeStatusSummary) []string {
 	if status.PrunedAlertEvents > 0 {
 		lines = append(lines, fmt.Sprintf("  Startup Pruned Alert Events: %d", status.PrunedAlertEvents))
 	}
-	if status.PrunedPricePoints > 0 {
-		lines = append(lines, fmt.Sprintf("  Startup Pruned Price Points: %d", status.PrunedPricePoints))
-	}
 
 	return lines
 }

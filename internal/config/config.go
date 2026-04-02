@@ -21,7 +21,6 @@ const (
 	defaultTelegramTimeoutSeconds  = 10
 	defaultRawListingRetentionHrs  = 24 * 14
 	defaultAlertEventRetentionHrs  = 24 * 30
-	defaultPricePointRetentionHrs  = 24 * 90
 )
 
 // Config holds runtime configuration for the single-process v1 application.
@@ -72,7 +71,6 @@ type TelegramConfig struct {
 type RetentionConfig struct {
 	RawListingsHours int
 	AlertEventsHours int
-	PricePointsHours int
 }
 
 // Load reads configuration from environment variables and applies safe defaults
@@ -118,11 +116,6 @@ func Load() (Config, error) {
 		return Config{}, err
 	}
 
-	pricePointRetentionHours, err := getEnvInt("PRICEALERT_PRICE_POINT_RETENTION_HOURS", defaultPricePointRetentionHrs)
-	if err != nil {
-		return Config{}, err
-	}
-
 	cfg := Config{
 		AppName: getEnv("PRICEALERT_APP_NAME", defaultAppName),
 		Runtime: RuntimeConfig{
@@ -157,7 +150,6 @@ func Load() (Config, error) {
 		Retention: RetentionConfig{
 			RawListingsHours: rawListingRetentionHours,
 			AlertEventsHours: alertEventRetentionHours,
-			PricePointsHours: pricePointRetentionHours,
 		},
 	}
 
@@ -218,9 +210,6 @@ func (c Config) Validate() error {
 	}
 	if c.Retention.AlertEventsHours < 0 {
 		return fmt.Errorf("alert event retention hours must be >= 0")
-	}
-	if c.Retention.PricePointsHours < 0 {
-		return fmt.Errorf("price point retention hours must be >= 0")
 	}
 
 	return nil

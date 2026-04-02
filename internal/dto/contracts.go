@@ -95,8 +95,6 @@ type RuntimeStatusSummary struct {
 	LastPrunedAt           *time.Time `json:"last_pruned_at"`
 	PrunedAlertEvents      int        `json:"pruned_alert_events"`
 	LastAlertPrunedAt      *time.Time `json:"last_alert_pruned_at"`
-	PrunedPricePoints      int        `json:"pruned_price_points"`
-	LastPricePointPrunedAt *time.Time `json:"last_price_point_pruned_at"`
 }
 
 type TelegramTopListing struct {

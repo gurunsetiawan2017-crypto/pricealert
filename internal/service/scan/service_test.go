@@ -384,10 +384,6 @@ func (f *fakePricePointRepo) ListRecentByKeywordID(_ context.Context, _ string, 
 	return history, nil
 }
 
-func (f *fakePricePointRepo) PruneOlderThanRecordedAt(_ context.Context, _ time.Time) (int, error) {
-	return 0, nil
-}
-
 type fakeAlertEventRepo struct {
 	created      []domain.AlertEvent
 	recentEvents []domain.AlertEvent

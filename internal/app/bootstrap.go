@@ -58,16 +58,10 @@ func New(cfg config.Config) (*App, error) {
 		_ = db.Close()
 		return nil, err
 	}
-	pricePointPruning, err := prunePricePoints(context.Background(), repos.pricePoints, cfg.Retention.PricePointsHours, clock)
-	if err != nil {
-		_ = db.Close()
-		return nil, err
-	}
 	runtime := newRuntimeWithClock(cfg, repos, clock)
 	runtime.startup = startup
 	runtime.pruning = pruning
 	runtime.alertPruning = alertPruning
-	runtime.historyPruning = pricePointPruning
 
 	return &App{
 		cfg:        cfg,

@@ -269,23 +269,6 @@ func TestPruneAlertEventsUsesAgeCutoff(t *testing.T) {
 	}
 }
 
-func TestPrunePricePointsUsesAgeCutoff(t *testing.T) {
-	clock := stubClock{current: time.Date(2026, 4, 2, 10, 5, 0, 0, time.UTC)}
-	repo := &fakeStartupPricePointRepo{prunedCount: 4}
-
-	result, err := prunePricePoints(context.Background(), repo, 168, clock)
-	if err != nil {
-		t.Fatalf("prunePricePoints() error = %v", err)
-	}
-	wantCutoff := clock.current.Add(-168 * time.Hour)
-	if !repo.cutoff.Equal(wantCutoff) {
-		t.Fatalf("cutoff = %v, want %v", repo.cutoff, wantCutoff)
-	}
-	if result.PrunedCount != 4 {
-		t.Fatalf("pruned count = %d, want 4", result.PrunedCount)
-	}
-}
-
 func TestRuntimeStatusIncludesRawListingPruning(t *testing.T) {
 	now := time.Date(2026, 4, 2, 10, 5, 0, 0, time.UTC)
 	runtime := newRuntime(minimalConfig(), appRepositories{trackedKeywords: &fakeTrackedKeywordRepo{}})
@@ -303,18 +286,14 @@ func TestRuntimeStatusIncludesRawListingPruning(t *testing.T) {
 	}
 }
 
-func TestRuntimeStatusIncludesAlertAndPricePointPruning(t *testing.T) {
+func TestRuntimeStatusIncludesAlertPruning(t *testing.T) {
 	now := time.Date(2026, 4, 2, 10, 5, 0, 0, time.UTC)
 	runtime := newRuntime(minimalConfig(), appRepositories{trackedKeywords: &fakeTrackedKeywordRepo{}})
 	runtime.alertPruning = AlertEventPruneResult{PrunedCount: 5, PrunedAt: &now}
-	runtime.historyPruning = PricePointPruneResult{PrunedCount: 4, PrunedAt: &now}
 
 	status := runtime.Status()
 	if status.PrunedAlertEvents != 5 {
 		t.Fatalf("pruned alert events = %d, want 5", status.PrunedAlertEvents)
-	}
-	if status.PrunedPricePoints != 4 {
-		t.Fatalf("pruned price points = %d, want 4", status.PrunedPricePoints)
 	}
 }
 
@@ -504,24 +483,6 @@ func (f *fakeStartupAlertEventRepo) ListRecentByKeywordID(context.Context, strin
 	return nil, nil
 }
 func (f *fakeStartupAlertEventRepo) PruneOlderThanCreatedAt(_ context.Context, cutoff time.Time) (int, error) {
-	f.cutoff = cutoff
-	if f.err != nil {
-		return 0, f.err
-	}
-	return f.prunedCount, nil
-}
-
-type fakeStartupPricePointRepo struct {
-	cutoff      time.Time
-	prunedCount int
-	err         error
-}
-
-func (f *fakeStartupPricePointRepo) Create(context.Context, domain.PricePoint) error { return nil }
-func (f *fakeStartupPricePointRepo) ListRecentByKeywordID(context.Context, string, int) ([]domain.PricePoint, error) {
-	return nil, nil
-}
-func (f *fakeStartupPricePointRepo) PruneOlderThanRecordedAt(_ context.Context, cutoff time.Time) (int, error) {
 	f.cutoff = cutoff
 	if f.err != nil {
 		return 0, f.err

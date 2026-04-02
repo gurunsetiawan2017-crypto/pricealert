@@ -243,9 +243,6 @@ func (f *fakePricePointRepo) Create(context.Context, domain.PricePoint) error { 
 func (f *fakePricePointRepo) ListRecentByKeywordID(_ context.Context, keywordID string, _ int) ([]domain.PricePoint, error) {
 	return f.byKeywordID[keywordID], nil
 }
-func (f *fakePricePointRepo) PruneOlderThanRecordedAt(context.Context, time.Time) (int, error) {
-	return 0, nil
-}
 
 type fakeAlertEventRepo struct {
 	byKeywordID map[string][]domain.AlertEvent

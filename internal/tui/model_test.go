@@ -242,7 +242,6 @@ func TestDashboardViewShowsRuntimeStatusSummary(t *testing.T) {
 			ReconciledRunningJobs: 3,
 			PrunedRawListings:     9,
 			PrunedAlertEvents:     5,
-			PrunedPricePoints:     4,
 		},
 	}
 
@@ -263,9 +262,6 @@ func TestDashboardViewShowsRuntimeStatusSummary(t *testing.T) {
 		t.Fatalf("view = %q", view)
 	}
 	if !strings.Contains(view, "Startup Pruned Alert Events: 5") {
-		t.Fatalf("view = %q", view)
-	}
-	if !strings.Contains(view, "Startup Pruned Price Points: 4") {
 		t.Fatalf("view = %q", view)
 	}
 }

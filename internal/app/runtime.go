@@ -51,7 +51,6 @@ type Runtime struct {
 	startup        StartupReconciliationResult
 	pruning        RawListingPruneResult
 	alertPruning   AlertEventPruneResult
-	historyPruning PricePointPruneResult
 }
 
 func (r *Runtime) RunOnce(ctx context.Context) (rtscheduler.RunResult, error) {
@@ -69,8 +68,6 @@ type RuntimeStatus struct {
 	LastPrunedAt           *time.Time
 	PrunedAlertEvents      int
 	LastAlertPrunedAt      *time.Time
-	PrunedPricePoints      int
-	LastPricePointPrunedAt *time.Time
 }
 
 func (r *Runtime) Status() RuntimeStatus {
@@ -88,8 +85,6 @@ func (r *Runtime) Status() RuntimeStatus {
 		LastPrunedAt:           r.pruning.PrunedAt,
 		PrunedAlertEvents:      r.alertPruning.PrunedCount,
 		LastAlertPrunedAt:      r.alertPruning.PrunedAt,
-		PrunedPricePoints:      r.historyPruning.PrunedCount,
-		LastPricePointPrunedAt: r.historyPruning.PrunedAt,
 	}
 }
 
@@ -150,11 +145,6 @@ type AlertEventPruneResult struct {
 	PrunedAt    *time.Time
 }
 
-type PricePointPruneResult struct {
-	PrunedCount int
-	PrunedAt    *time.Time
-}
-
 func reconcileAbandonedRunningScanJobs(ctx context.Context, scanJobs repository.ScanJobRepository, clock Clock) (StartupReconciliationResult, error) {
 	running, err := scanJobs.ListRunning(ctx, 1024)
 	if err != nil {
@@ -209,24 +199,6 @@ func pruneAlertEvents(ctx context.Context, alertEvents repository.AlertEventRepo
 	}
 
 	return AlertEventPruneResult{
-		PrunedCount: pruned,
-		PrunedAt:    &now,
-	}, nil
-}
-
-func prunePricePoints(ctx context.Context, pricePoints repository.PricePointRepository, retentionHours int, clock Clock) (PricePointPruneResult, error) {
-	if retentionHours <= 0 {
-		return PricePointPruneResult{}, nil
-	}
-
-	now := clock.Now()
-	cutoff := now.Add(-time.Duration(retentionHours) * time.Hour)
-	pruned, err := pricePoints.PruneOlderThanRecordedAt(ctx, cutoff)
-	if err != nil {
-		return PricePointPruneResult{}, err
-	}
-
-	return PricePointPruneResult{
 		PrunedCount: pruned,
 		PrunedAt:    &now,
 	}, nil

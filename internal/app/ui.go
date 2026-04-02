@@ -62,8 +62,6 @@ func (a runtimeStatusAdapter) Summary(context.Context) (*dto.RuntimeStatusSummar
 		LastPrunedAt:           status.LastPrunedAt,
 		PrunedAlertEvents:      status.PrunedAlertEvents,
 		LastAlertPrunedAt:      status.LastAlertPrunedAt,
-		PrunedPricePoints:      status.PrunedPricePoints,
-		LastPricePointPrunedAt: status.LastPricePointPrunedAt,
 	}, nil
 }
 

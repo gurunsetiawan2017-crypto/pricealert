@@ -102,8 +102,6 @@ func TestRuntimeStatusAdapterMapsSummary(t *testing.T) {
 			LastPrunedAt:           &now,
 			PrunedAlertEvents:      5,
 			LastAlertPrunedAt:      &now,
-			PrunedPricePoints:      4,
-			LastPricePointPrunedAt: &now,
 		},
 	})
 
@@ -120,7 +118,7 @@ func TestRuntimeStatusAdapterMapsSummary(t *testing.T) {
 	if summary.PrunedRawListings != 9 {
 		t.Fatalf("pruned raw listings = %d", summary.PrunedRawListings)
 	}
-	if summary.PrunedAlertEvents != 5 || summary.PrunedPricePoints != 4 {
+	if summary.PrunedAlertEvents != 5 {
 		t.Fatalf("summary = %#v", summary)
 	}
 }
