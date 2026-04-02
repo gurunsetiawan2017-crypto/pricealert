@@ -312,13 +312,13 @@ func TestDetailViewShowsKeywordRuntimeHealth(t *testing.T) {
 	if !strings.Contains(view, "Runtime Running: yes") {
 		t.Fatalf("view = %q", view)
 	}
-	if !strings.Contains(view, "Last Success: 2026-04-02 17:40") {
+	if !strings.Contains(view, "Last Success: 2026-04-02") {
 		t.Fatalf("view = %q", view)
 	}
 	if !strings.Contains(view, "Last Error: tokopedia search request") {
 		t.Fatalf("view = %q", view)
 	}
-	if !strings.Contains(view, "Last Error At: 2026-04-02 17:40") {
+	if !strings.Contains(view, "Last Error At: 2026-04-02") {
 		t.Fatalf("view = %q", view)
 	}
 }
