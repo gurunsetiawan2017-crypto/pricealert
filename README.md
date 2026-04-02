@@ -184,6 +184,21 @@ This starts the single-process local app:
 - startup maintenance may reconcile abandoned `running` scan jobs and prune old raw listings / alert events
 - the Tokopedia adapter is still a feasibility adapter, so scraper behavior may need further hardening
 
+## GitHub Quality Gates
+
+This repository now includes a small GitHub quality baseline under `.github/`:
+
+- CI workflow for formatting, `go mod tidy`, `go vet`, and `go test ./...`
+- dependency review on pull requests
+- Dependabot version/security update configuration
+- CODEOWNERS for higher-risk runtime, scraper, scan, and migration areas
+- PR template for summary, validation, and risk
+
+Recommended repository-side settings such as branch protection, secret scanning,
+Dependabot alerts, and CodeQL default setup are documented in:
+
+- [docs/github-setup-v1.md](/home/iwan/Project/pricealert/docs/github-setup-v1.md)
+
 ## Recommended Build Order
 
 The implementation plan intentionally prioritizes trust and correctness before UI polish.
