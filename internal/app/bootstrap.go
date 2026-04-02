@@ -7,6 +7,7 @@ import (
 	"github.com/pricealert/pricealert/internal/config"
 	infraDB "github.com/pricealert/pricealert/internal/infra/db"
 	"github.com/pricealert/pricealert/internal/repository"
+	rtscheduler "github.com/pricealert/pricealert/internal/runtime/scheduler"
 )
 
 // App is a thin bootstrap shell for milestone A.
@@ -21,7 +22,9 @@ type App struct {
 	rawListings     repository.RawListingRepository
 	groupedListings repository.GroupedListingRepository
 	snapshots       repository.MarketSnapshotRepository
+	pricePoints     repository.PricePointRepository
 	alertEvents     repository.AlertEventRepository
+	runtime         *Runtime
 }
 
 func New(cfg config.Config) (*App, error) {
@@ -50,7 +53,17 @@ func New(cfg config.Config) (*App, error) {
 		rawListings:     repository.NewMariaDBRawListingRepository(db),
 		groupedListings: repository.NewMariaDBGroupedListingRepository(db),
 		snapshots:       repository.NewMariaDBMarketSnapshotRepository(db),
+		pricePoints:     repository.NewMariaDBPricePointRepository(db),
 		alertEvents:     repository.NewMariaDBAlertEventRepository(db),
+		runtime: newRuntime(
+			repository.NewMariaDBTrackedKeywordRepository(db),
+			repository.NewMariaDBScanJobRepository(db),
+			repository.NewMariaDBRawListingRepository(db),
+			repository.NewMariaDBGroupedListingRepository(db),
+			repository.NewMariaDBMarketSnapshotRepository(db),
+			repository.NewMariaDBPricePointRepository(db),
+			repository.NewMariaDBAlertEventRepository(db),
+		),
 	}, nil
 }
 
@@ -65,6 +78,12 @@ func (a *App) Run() error {
 	_ = a.rawListings
 	_ = a.groupedListings
 	_ = a.snapshots
+	_ = a.pricePoints
 	_ = a.alertEvents
+	_ = a.runtime
 	return nil
+}
+
+func (a *App) RunRuntimeOnce(ctx context.Context) (rtscheduler.RunResult, error) {
+	return a.runtime.RunOnce(ctx)
 }
