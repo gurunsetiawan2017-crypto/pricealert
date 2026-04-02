@@ -150,6 +150,50 @@ func TestRuntimeCloseStopsNewWork(t *testing.T) {
 	}
 }
 
+func TestRuntimeScanKeywordNowExecutesSelectedKeyword(t *testing.T) {
+	clock := stubClock{current: time.Date(2026, 4, 2, 10, 0, 0, 0, time.UTC)}
+	stateStore := rtstate.NewStore()
+	executor := &recordingWorkerExecutor{}
+	worker := rtworker.New(stateStore, executor, clock, 1)
+	repo := &fakeTrackedKeywordRepo{
+		byID: map[string]domain.TrackedKeyword{
+			"kw_1": {ID: "kw_1", Keyword: "Raspberry Pi 3", Status: domain.TrackedKeywordStatusActive, IntervalMinutes: 5},
+		},
+	}
+	runtime := &Runtime{
+		worker:          worker,
+		state:           stateStore,
+		trackedKeywords: repo,
+	}
+
+	if err := runtime.ScanKeywordNow(context.Background(), "kw_1"); err != nil {
+		t.Fatalf("ScanKeywordNow() error = %v", err)
+	}
+	if executor.calls != 1 || executor.lastKeywordID != "kw_1" {
+		t.Fatalf("executor calls = %d last = %q", executor.calls, executor.lastKeywordID)
+	}
+}
+
+func TestRuntimeScanKeywordNowRejectsArchivedKeyword(t *testing.T) {
+	clock := stubClock{current: time.Date(2026, 4, 2, 10, 0, 0, 0, time.UTC)}
+	stateStore := rtstate.NewStore()
+	worker := rtworker.New(stateStore, &recordingWorkerExecutor{}, clock, 1)
+	repo := &fakeTrackedKeywordRepo{
+		byID: map[string]domain.TrackedKeyword{
+			"kw_1": {ID: "kw_1", Status: domain.TrackedKeywordStatusArchived, IntervalMinutes: 5},
+		},
+	}
+	runtime := &Runtime{
+		worker:          worker,
+		state:           stateStore,
+		trackedKeywords: repo,
+	}
+
+	if err := runtime.ScanKeywordNow(context.Background(), "kw_1"); !errors.Is(err, errKeywordArchived) {
+		t.Fatalf("ScanKeywordNow() error = %v, want archived error", err)
+	}
+}
+
 func TestReconcileAbandonedRunningScanJobsMarksRunningJobsFailed(t *testing.T) {
 	clock := stubClock{current: time.Date(2026, 4, 2, 10, 5, 0, 0, time.UTC)}
 	repo := &fakeStartupScanJobRepo{
@@ -336,12 +380,17 @@ func TestRuntimeStatusIncludesAlertPruning(t *testing.T) {
 
 type fakeTrackedKeywordRepo struct {
 	active          []domain.TrackedKeyword
+	byID            map[string]domain.TrackedKeyword
 	listActiveCalls int
 }
 
 func (f *fakeTrackedKeywordRepo) Create(context.Context, domain.TrackedKeyword) error { return nil }
 func (f *fakeTrackedKeywordRepo) Update(context.Context, domain.TrackedKeyword) error { return nil }
-func (f *fakeTrackedKeywordRepo) GetByID(context.Context, string) (*domain.TrackedKeyword, error) {
+func (f *fakeTrackedKeywordRepo) GetByID(_ context.Context, id string) (*domain.TrackedKeyword, error) {
+	if keyword, ok := f.byID[id]; ok {
+		kw := keyword
+		return &kw, nil
+	}
 	return nil, nil
 }
 func (f *fakeTrackedKeywordRepo) ListActive(context.Context) ([]domain.TrackedKeyword, error) {
@@ -381,6 +430,17 @@ func (s stubClock) Now() time.Time {
 type fakeWorkerExecutor struct{}
 
 func (fakeWorkerExecutor) Execute(context.Context, domain.TrackedKeyword) error {
+	return nil
+}
+
+type recordingWorkerExecutor struct {
+	calls         int
+	lastKeywordID string
+}
+
+func (r *recordingWorkerExecutor) Execute(_ context.Context, keyword domain.TrackedKeyword) error {
+	r.calls++
+	r.lastKeywordID = keyword.ID
 	return nil
 }
 

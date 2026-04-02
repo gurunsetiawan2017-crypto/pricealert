@@ -3,6 +3,7 @@ package app
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"time"
 
 	"github.com/pricealert/pricealert/internal/config"
@@ -45,29 +46,45 @@ func newAppRepositories(db *sql.DB) appRepositories {
 }
 
 type Runtime struct {
-	scheduler      *rtscheduler.Scheduler
-	worker         *rtworker.Worker
-	state          *rtstate.Store
-	startup        StartupReconciliationResult
-	pruning        RawListingPruneResult
-	alertPruning   AlertEventPruneResult
+	scheduler       *rtscheduler.Scheduler
+	worker          *rtworker.Worker
+	state           *rtstate.Store
+	trackedKeywords repository.TrackedKeywordRepository
+	startup         StartupReconciliationResult
+	pruning         RawListingPruneResult
+	alertPruning    AlertEventPruneResult
 }
 
 func (r *Runtime) RunOnce(ctx context.Context) (rtscheduler.RunResult, error) {
 	return r.scheduler.RunOnce(ctx)
 }
 
+func (r *Runtime) ScanKeywordNow(ctx context.Context, keywordID string) error {
+	keyword, err := r.trackedKeywords.GetByID(ctx, keywordID)
+	if err != nil {
+		return err
+	}
+	if keyword == nil {
+		return sql.ErrNoRows
+	}
+	if keyword.Status == domain.TrackedKeywordStatusArchived {
+		return errKeywordArchived
+	}
+
+	return r.worker.ExecuteNow(ctx, *keyword)
+}
+
 type RuntimeStatus struct {
-	AcceptingNewWork       bool
-	MaxConcurrent          int
-	RunningCount           int
-	TrackedKeywords        int
-	ReconciledRunningJobs  int
-	LastReconciledAt       *time.Time
-	PrunedRawListings      int
-	LastPrunedAt           *time.Time
-	PrunedAlertEvents      int
-	LastAlertPrunedAt      *time.Time
+	AcceptingNewWork      bool
+	MaxConcurrent         int
+	RunningCount          int
+	TrackedKeywords       int
+	ReconciledRunningJobs int
+	LastReconciledAt      *time.Time
+	PrunedRawListings     int
+	LastPrunedAt          *time.Time
+	PrunedAlertEvents     int
+	LastAlertPrunedAt     *time.Time
 }
 
 func (r *Runtime) Status() RuntimeStatus {
@@ -75,16 +92,16 @@ func (r *Runtime) Status() RuntimeStatus {
 	stateSummary := r.state.Summary()
 
 	return RuntimeStatus{
-		AcceptingNewWork:       workerStatus.AcceptingNewWork,
-		MaxConcurrent:          workerStatus.MaxConcurrent,
-		RunningCount:           stateSummary.RunningCount,
-		TrackedKeywords:        stateSummary.KeywordsTracked,
-		ReconciledRunningJobs:  r.startup.ReconciledCount,
-		LastReconciledAt:       r.startup.ReconciledAt,
-		PrunedRawListings:      r.pruning.PrunedCount,
-		LastPrunedAt:           r.pruning.PrunedAt,
-		PrunedAlertEvents:      r.alertPruning.PrunedCount,
-		LastAlertPrunedAt:      r.alertPruning.PrunedAt,
+		AcceptingNewWork:      workerStatus.AcceptingNewWork,
+		MaxConcurrent:         workerStatus.MaxConcurrent,
+		RunningCount:          stateSummary.RunningCount,
+		TrackedKeywords:       stateSummary.KeywordsTracked,
+		ReconciledRunningJobs: r.startup.ReconciledCount,
+		LastReconciledAt:      r.startup.ReconciledAt,
+		PrunedRawListings:     r.pruning.PrunedCount,
+		LastPrunedAt:          r.pruning.PrunedAt,
+		PrunedAlertEvents:     r.alertPruning.PrunedCount,
+		LastAlertPrunedAt:     r.alertPruning.PrunedAt,
 	}
 }
 
@@ -129,6 +146,8 @@ func (systemClock) Now() time.Time {
 }
 
 const abandonedScanJobReason = "startup reconciliation: previous app run ended before scan completed"
+
+var errKeywordArchived = errors.New("archived keyword cannot be scanned")
 
 type StartupReconciliationResult struct {
 	ReconciledCount int
@@ -235,7 +254,12 @@ func newRuntimeWithClock(cfg config.Config, repos appRepositories, clock Clock) 
 	worker := rtworker.New(stateStore, scanExecutorAdapter{scan: scanService}, clock, cfg.Runtime.MaxConcurrentScans)
 	scheduler := rtscheduler.New(trackedKeywordSourceAdapter{repo: repos.trackedKeywords}, stateStore, worker, clock)
 
-	return &Runtime{scheduler: scheduler, worker: worker, state: stateStore}
+	return &Runtime{
+		scheduler:       scheduler,
+		worker:          worker,
+		state:           stateStore,
+		trackedKeywords: repos.trackedKeywords,
+	}
 }
 
 func newTelegramSender(cfg config.Config) notifyservice.Sender {

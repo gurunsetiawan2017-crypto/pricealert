@@ -10,7 +10,7 @@ import (
 )
 
 func TestRuntimeTriggerAdapterMapsRunResult(t *testing.T) {
-	trigger := newRuntimeTrigger(fakeRuntimeRunner{
+	trigger := newRuntimeTrigger(&fakeRuntimeRunner{
 		result: rtscheduler.RunResult{
 			Started: []string{"kw_1"},
 			Skipped: []string{"kw_2"},
@@ -30,11 +30,23 @@ func TestRuntimeTriggerAdapterMapsRunResult(t *testing.T) {
 }
 
 func TestRuntimeTriggerAdapterReturnsError(t *testing.T) {
-	trigger := newRuntimeTrigger(fakeRuntimeRunner{err: errors.New("boom")})
+	trigger := newRuntimeTrigger(&fakeRuntimeRunner{err: errors.New("boom")})
 
 	_, err := trigger.RunOnce(context.Background())
 	if err == nil {
 		t.Fatalf("expected error, got nil")
+	}
+}
+
+func TestRuntimeTriggerAdapterDelegatesScanNow(t *testing.T) {
+	runner := &fakeRuntimeRunner{}
+	trigger := newRuntimeTrigger(runner)
+
+	if err := trigger.ScanNow(context.Background(), "kw_1"); err != nil {
+		t.Fatalf("ScanNow() error = %v", err)
+	}
+	if runner.scanNowKeywordID != "kw_1" {
+		t.Fatalf("scan now keyword id = %q", runner.scanNowKeywordID)
 	}
 }
 
@@ -93,15 +105,15 @@ func TestRuntimeStatusAdapterMapsSummary(t *testing.T) {
 	now := time.Date(2026, 4, 2, 10, 40, 0, 0, time.UTC)
 	adapter := newRuntimeStatusAdapter(fakeRuntimeStatusSource{
 		status: RuntimeStatus{
-			AcceptingNewWork:       true,
-			RunningCount:           1,
-			MaxConcurrent:          2,
-			ReconciledRunningJobs:  3,
-			LastReconciledAt:       &now,
-			PrunedRawListings:      9,
-			LastPrunedAt:           &now,
-			PrunedAlertEvents:      5,
-			LastAlertPrunedAt:      &now,
+			AcceptingNewWork:      true,
+			RunningCount:          1,
+			MaxConcurrent:         2,
+			ReconciledRunningJobs: 3,
+			LastReconciledAt:      &now,
+			PrunedRawListings:     9,
+			LastPrunedAt:          &now,
+			PrunedAlertEvents:     5,
+			LastAlertPrunedAt:     &now,
 		},
 	})
 
@@ -123,13 +135,39 @@ func TestRuntimeStatusAdapterMapsSummary(t *testing.T) {
 	}
 }
 
-type fakeRuntimeRunner struct {
-	result rtscheduler.RunResult
-	err    error
+func TestBrowserOpenerAdapterDelegates(t *testing.T) {
+	called := false
+	opener := browserOpenerAdapter{
+		open: func(_ context.Context, url string) error {
+			called = true
+			if url != "https://example.com" {
+				t.Fatalf("url = %q", url)
+			}
+			return nil
+		},
+	}
+
+	if err := opener.OpenURL(context.Background(), "https://example.com"); err != nil {
+		t.Fatalf("OpenURL() error = %v", err)
+	}
+	if !called {
+		t.Fatalf("expected opener to be called")
+	}
 }
 
-func (f fakeRuntimeRunner) RunRuntimeOnce(context.Context) (rtscheduler.RunResult, error) {
+type fakeRuntimeRunner struct {
+	result           rtscheduler.RunResult
+	err              error
+	scanNowKeywordID string
+}
+
+func (f *fakeRuntimeRunner) RunRuntimeOnce(context.Context) (rtscheduler.RunResult, error) {
 	return f.result, f.err
+}
+
+func (f *fakeRuntimeRunner) ScanKeywordNow(_ context.Context, keywordID string) error {
+	f.scanNowKeywordID = keywordID
+	return f.err
 }
 
 type fakeKeywordActionService struct {

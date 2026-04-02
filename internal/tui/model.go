@@ -3,10 +3,13 @@ package tui
 import (
 	"context"
 	"fmt"
+	"os/exec"
 	"strconv"
 	"strings"
+	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
 
 	"github.com/pricealert/pricealert/internal/dto"
 )
@@ -18,6 +21,11 @@ type QueryService interface {
 
 type RuntimeTrigger interface {
 	RunOnce(context.Context) (RuntimeRunResult, error)
+	ScanNow(context.Context, string) error
+}
+
+type BrowserOpener interface {
+	OpenURL(context.Context, string) error
 }
 
 type KeywordActions interface {
@@ -68,6 +76,14 @@ type refreshDoneMsg struct {
 	runtime bool
 }
 
+type forceScanDoneMsg struct {
+	screen screen
+	detail *dto.KeywordDetail
+	state  *dto.DashboardState
+	status string
+	err    error
+}
+
 type keywordActionDoneMsg struct {
 	screen screen
 	state  *dto.DashboardState
@@ -76,30 +92,58 @@ type keywordActionDoneMsg struct {
 	err    error
 }
 
-type Model struct {
-	query             QueryService
-	runtime           RuntimeTrigger
-	keywords          KeywordActions
-	screen            screen
-	dashboard         *dto.DashboardState
-	detail            *dto.KeywordDetail
-	selectedIndex     int
-	selectedKeywordID *string
-	err               error
-	loading           bool
-	statusMessage     string
-	addingKeyword     bool
-	addKeywordInput   string
-	editingField      editField
-	editFieldInput    string
+type openURLDoneMsg struct {
+	url string
+	err error
 }
 
-func NewModel(query QueryService, runtime RuntimeTrigger, keywords KeywordActions) Model {
+type dashboardFocus string
+type detailFocus string
+
+const (
+	dashboardFocusKeywords dashboardFocus = "keywords"
+	dashboardFocusDeals    dashboardFocus = "deals"
+
+	detailFocusDeals   detailFocus = "deals"
+	detailFocusHistory detailFocus = "history"
+)
+
+type Model struct {
+	query              QueryService
+	runtime            RuntimeTrigger
+	browser            BrowserOpener
+	keywords           KeywordActions
+	screen             screen
+	dashboard          *dto.DashboardState
+	detail             *dto.KeywordDetail
+	selectedIndex      int
+	selectedKeywordID  *string
+	err                error
+	loading            bool
+	statusMessage      string
+	addingKeyword      bool
+	addKeywordInput    string
+	editingField       editField
+	editFieldInput     string
+	width              int
+	height             int
+	dashboardFocus     dashboardFocus
+	detailFocus        detailFocus
+	dashboardDealIndex int
+	detailDealIndex    int
+}
+
+func NewModel(query QueryService, runtime RuntimeTrigger, browser BrowserOpener, keywords KeywordActions) Model {
 	return Model{
-		query:    query,
-		runtime:  runtime,
-		keywords: keywords,
-		screen:   screenDashboard,
+		query:          query,
+		runtime:        runtime,
+		browser:        browser,
+		keywords:       keywords,
+		screen:         screenDashboard,
+		width:          120,
+		height:         36,
+		dashboardFocus: dashboardFocusKeywords,
+		detailFocus:    detailFocusDeals,
 	}
 }
 
@@ -113,6 +157,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.KeyMsg:
 		return m.updateKey(msg)
+	case tea.WindowSizeMsg:
+		m.width = msg.Width
+		m.height = msg.Height
+		return m, nil
 	case dashboardLoadedMsg:
 		m.loading = false
 		m.err = msg.err
@@ -124,6 +172,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.screen = screenDashboard
 		m.selectedKeywordID = msg.state.SelectedKeywordID
 		m.selectedIndex = selectedIndexForDashboard(msg.state)
+		m.dashboardDealIndex = clampIndex(m.dashboardDealIndex, len(msg.state.TopDeals))
 		m.statusMessage = "Dashboard loaded"
 		return m, nil
 	case detailLoadedMsg:
@@ -135,6 +184,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.detail = msg.detail
 		m.screen = screenDetail
+		if msg.detail != nil {
+			m.detailDealIndex = clampIndex(m.detailDealIndex, len(msg.detail.TopDeals))
+		}
 		m.statusMessage = "Detail loaded"
 		return m, nil
 	case keywordActionDoneMsg:
@@ -185,6 +237,35 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.statusMessage = msg.status
 		return m, nil
+	case forceScanDoneMsg:
+		m.loading = false
+		m.err = msg.err
+		if msg.err != nil {
+			m.statusMessage = "Force scan failed"
+			return m, nil
+		}
+		if msg.screen == screenDetail {
+			m.detail = msg.detail
+			m.screen = screenDetail
+		} else {
+			m.dashboard = msg.state
+			m.screen = screenDashboard
+			if msg.state != nil {
+				m.selectedKeywordID = msg.state.SelectedKeywordID
+				m.selectedIndex = selectedIndexForDashboard(msg.state)
+			}
+		}
+		m.statusMessage = msg.status
+		return m, nil
+	case openURLDoneMsg:
+		m.loading = false
+		m.err = msg.err
+		if msg.err != nil {
+			m.statusMessage = "Open link failed"
+			return m, nil
+		}
+		m.statusMessage = "Opened link in browser"
+		return m, nil
 	}
 
 	return m, nil
@@ -202,6 +283,10 @@ func (m Model) updateKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 	if m.screen == screenDetail {
 		switch msg.String() {
+		case "tab":
+			m.detailFocus = nextDetailFocus(m.detailFocus)
+			m.statusMessage = fmt.Sprintf("Focus: %s", m.detailFocus)
+			return m, nil
 		case "esc", "h", "backspace":
 			m.loading = true
 			m.statusMessage = "Loading dashboard..."
@@ -213,6 +298,31 @@ func (m Model) updateKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				return m, nil
 			}
 			return m, refreshCurrentScreenCmd(m.query, m.runtime, screenDetail, m.selectedKeywordID)
+		case "s":
+			if m.detail != nil {
+				m.loading = true
+				m.statusMessage = "Running scan now..."
+				return m, forceScanCmd(m.query, m.runtime, screenDetail, m.detail.Keyword.ID)
+			}
+		case "j", "down":
+			if m.detailFocus == detailFocusDeals {
+				m.detailDealIndex = clampIndex(m.detailDealIndex+1, len(m.currentDetailDeals()))
+			}
+			return m, nil
+		case "k", "up":
+			if m.detailFocus == detailFocusDeals {
+				m.detailDealIndex = clampIndex(m.detailDealIndex-1, len(m.currentDetailDeals()))
+			}
+			return m, nil
+		case "enter", "l":
+			if m.detailFocus == detailFocusDeals {
+				if url, ok := m.currentDetailDealURL(); ok {
+					m.loading = true
+					m.statusMessage = "Opening deal in browser..."
+					return m, openURLCmd(m.browser, url)
+				}
+			}
+			return m, nil
 		case "p":
 			if m.detail != nil {
 				m.loading = true
@@ -263,19 +373,39 @@ func (m Model) updateKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	}
 
 	switch msg.String() {
+	case "tab":
+		m.dashboardFocus = nextDashboardFocus(m.dashboardFocus)
+		m.statusMessage = fmt.Sprintf("Focus: %s", m.dashboardFocus)
+		return m, nil
 	case "j", "down":
+		if m.dashboardFocus == dashboardFocusDeals {
+			m.dashboardDealIndex = clampIndex(m.dashboardDealIndex+1, len(m.currentDashboardDeals()))
+			return m, nil
+		}
 		if keywordID, ok := m.nextSelection(1); ok {
 			m.loading = true
 			m.statusMessage = "Loading dashboard..."
 			return m, loadDashboardCmd(m.query, &keywordID)
 		}
 	case "k", "up":
+		if m.dashboardFocus == dashboardFocusDeals {
+			m.dashboardDealIndex = clampIndex(m.dashboardDealIndex-1, len(m.currentDashboardDeals()))
+			return m, nil
+		}
 		if keywordID, ok := m.nextSelection(-1); ok {
 			m.loading = true
 			m.statusMessage = "Loading dashboard..."
 			return m, loadDashboardCmd(m.query, &keywordID)
 		}
 	case "enter", "l":
+		if m.dashboardFocus == dashboardFocusDeals {
+			if url, ok := m.currentDashboardDealURL(); ok {
+				m.loading = true
+				m.statusMessage = "Opening deal in browser..."
+				return m, openURLCmd(m.browser, url)
+			}
+			return m, nil
+		}
 		if m.selectedKeywordID != nil {
 			m.loading = true
 			m.statusMessage = "Loading detail..."
@@ -285,6 +415,12 @@ func (m Model) updateKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.loading = true
 		m.statusMessage = "Refreshing dashboard..."
 		return m, refreshCurrentScreenCmd(m.query, m.runtime, screenDashboard, m.selectedKeywordID)
+	case "s":
+		if m.selectedKeywordID != nil {
+			m.loading = true
+			m.statusMessage = "Running scan now..."
+			return m, forceScanCmd(m.query, m.runtime, screenDashboard, *m.selectedKeywordID)
+		}
 	case "a":
 		m.addingKeyword = true
 		m.addKeywordInput = ""
@@ -395,6 +531,44 @@ func (m Model) submitEditField() (tea.Model, tea.Cmd) {
 	}
 }
 
+func (m Model) currentDashboardDeals() []dto.GroupedListing {
+	if m.dashboard == nil {
+		return nil
+	}
+	return limitGroupedListings(m.dashboard.TopDeals, 5)
+}
+
+func (m Model) currentDetailDeals() []dto.GroupedListing {
+	if m.detail == nil {
+		return nil
+	}
+	return limitGroupedListings(m.detail.TopDeals, 5)
+}
+
+func (m Model) currentDashboardDealURL() (string, bool) {
+	deals := m.currentDashboardDeals()
+	if len(deals) == 0 {
+		return "", false
+	}
+	idx := clampIndex(m.dashboardDealIndex, len(deals))
+	if deals[idx].SampleURL == "" {
+		return "", false
+	}
+	return deals[idx].SampleURL, true
+}
+
+func (m Model) currentDetailDealURL() (string, bool) {
+	deals := m.currentDetailDeals()
+	if len(deals) == 0 {
+		return "", false
+	}
+	idx := clampIndex(m.detailDealIndex, len(deals))
+	if deals[idx].SampleURL == "" {
+		return "", false
+	}
+	return deals[idx].SampleURL, true
+}
+
 func (m Model) View() string {
 	if m.err != nil {
 		return fmt.Sprintf("PriceAlert\n\nStatus: %s\n\nError: %v\n\nPress r to retry or q to quit.", m.statusMessage, m.err)
@@ -402,9 +576,9 @@ func (m Model) View() string {
 
 	switch m.screen {
 	case screenDetail:
-		return renderDetail(m.detail, m.loading, m.statusMessage, m.editingField, m.editFieldInput)
+		return renderDetail(m.detail, m.width, m.loading, m.statusMessage, m.editingField, m.editFieldInput, m.detailFocus, m.detailDealIndex)
 	default:
-		return renderDashboard(m.dashboard, m.selectedIndex, m.loading, m.statusMessage, m.addingKeyword, m.addKeywordInput)
+		return renderDashboard(m.dashboard, m.width, m.selectedIndex, m.loading, m.statusMessage, m.addingKeyword, m.addKeywordInput, m.dashboardFocus, m.dashboardDealIndex)
 	}
 }
 
@@ -454,6 +628,46 @@ func loadDetailCmd(query QueryService, keywordID string) tea.Cmd {
 	return func() tea.Msg {
 		detail, err := query.KeywordDetail(context.Background(), keywordID)
 		return detailLoadedMsg{detail: detail, err: err}
+	}
+}
+
+func forceScanCmd(query QueryService, runtime RuntimeTrigger, target screen, keywordID string) tea.Cmd {
+	return func() tea.Msg {
+		if err := runtime.ScanNow(context.Background(), keywordID); err != nil {
+			return forceScanDoneMsg{screen: target, err: err}
+		}
+
+		if target == screenDetail {
+			detail, err := query.KeywordDetail(context.Background(), keywordID)
+			status := "Scan complete"
+			if detail != nil {
+				status = fmt.Sprintf("Scan complete for %s", detail.Keyword.Keyword)
+			}
+			return forceScanDoneMsg{
+				screen: screenDetail,
+				detail: detail,
+				status: status,
+				err:    err,
+			}
+		}
+
+		selectedID := keywordID
+		state, err := query.DashboardState(context.Background(), &selectedID)
+		status := "Scan complete"
+		if state != nil && state.SelectedKeywordID != nil {
+			for _, keyword := range state.TrackedKeywords {
+				if keyword.ID == *state.SelectedKeywordID {
+					status = fmt.Sprintf("Scan complete for %s", keyword.Keyword)
+					break
+				}
+			}
+		}
+		return forceScanDoneMsg{
+			screen: screenDashboard,
+			state:  state,
+			status: status,
+			err:    err,
+		}
 	}
 }
 
@@ -624,66 +838,93 @@ func keywordActionStatus(action keywordActionType) string {
 	}
 }
 
-func renderDashboard(state *dto.DashboardState, selectedIndex int, loading bool, status string, adding bool, input string) string {
+func renderDashboard(state *dto.DashboardState, width int, selectedIndex int, loading bool, status string, adding bool, input string, focus dashboardFocus, dealIndex int) string {
 	if state == nil {
 		return fmt.Sprintf("PriceAlert\n\nStatus: %s", status)
 	}
 
-	var lines []string
-	lines = append(lines, "PriceAlert", "", "Dashboard", "")
-	lines = append(lines, fmt.Sprintf("Status: %s", status))
-	if loading {
-		lines = append(lines, "Loading: yes")
-	}
-	if adding {
-		lines = append(lines, fmt.Sprintf("Add Keyword: %s", input))
-		lines = append(lines, "Press enter to save, esc to cancel")
-	}
-	lines = append(lines, "", "Runtime:")
-	lines = append(lines, formatRuntimeStatus(state.RuntimeStatus)...)
-	lines = append(lines, "")
-	lines = append(lines, "Keywords:")
+	layout := computeLayout(width)
+	header := renderHeader("Dashboard", renderStatusLine(status, loading), layout.headerWidth)
+
+	keywordLines := make([]string, 0, len(state.TrackedKeywords))
 	if len(state.TrackedKeywords) == 0 {
-		lines = append(lines, "  (no tracked keywords)")
+		keywordLines = append(keywordLines, "(no tracked keywords)")
 	} else {
 		for index, keyword := range state.TrackedKeywords {
 			prefix := "  "
 			if index == selectedIndex {
-				prefix = "> "
+				prefix = selectedBulletStyle.Render("● ")
 			}
 			alertMarker := ""
 			if keyword.HasNewAlert {
-				alertMarker = " [alert]"
+				alertMarker = "  " + alertBadgeStyle.Render("ALERT")
 			}
-			lines = append(lines, fmt.Sprintf("%s%s (%s)%s", prefix, keyword.Keyword, keyword.Status, alertMarker))
+			keywordLines = append(keywordLines, fmt.Sprintf("%s%s", prefix, selectedKeywordText(index == selectedIndex, shorten(keyword.Keyword, layout.leftContentWidth-6))))
+			keywordLines = append(keywordLines, fmt.Sprintf("  status %s%s", keyword.Status, alertMarker))
 		}
 	}
 
-	lines = append(lines, "", "Selected Snapshot:")
+	snapshotLines := []string{"(no snapshot yet)"}
 	if state.SelectedSnapshot == nil {
-		lines = append(lines, "  (no snapshot yet)")
 	} else {
-		lines = append(lines, fmt.Sprintf("  Signal: %s", state.SelectedSnapshot.Signal))
-		lines = append(lines, fmt.Sprintf("  Min/Avg/Max: %s / %s / %s",
-			formatPrice(state.SelectedSnapshot.MinPrice),
-			formatPrice(state.SelectedSnapshot.AvgPrice),
-			formatPrice(state.SelectedSnapshot.MaxPrice),
-		))
-		lines = append(lines, fmt.Sprintf("  Raw/Grouped: %d / %d", state.SelectedSnapshot.RawCount, state.SelectedSnapshot.GroupedCount))
+		snapshotLines = []string{
+			fmt.Sprintf("Signal: %s   At: %s", formatSignal(state.SelectedSnapshot.Signal), formatTimestamp(&state.SelectedSnapshot.SnapshotAt)),
+			fmt.Sprintf("Min / Avg / Max: %s / %s / %s",
+				formatPrice(state.SelectedSnapshot.MinPrice),
+				formatPrice(state.SelectedSnapshot.AvgPrice),
+				formatPrice(state.SelectedSnapshot.MaxPrice),
+			),
+			fmt.Sprintf("Raw / Grouped: %d / %d", state.SelectedSnapshot.RawCount, state.SelectedSnapshot.GroupedCount),
+		}
 	}
 
-	lines = append(lines, "", fmt.Sprintf("Recent Events: %d", len(state.RecentEvents)))
-	for _, event := range state.RecentEvents {
-		lines = append(lines, fmt.Sprintf("  - [%s] %s", event.EventType, event.Message))
+	dealLines := formatDashboardDeals(state.TopDeals, dealIndex, focus == dashboardFocusDeals, max(32, layout.rightContentWidth-12))
+	eventLines := make([]string, 0, max(len(state.RecentEvents), 1))
+	if len(state.RecentEvents) == 0 {
+		eventLines = append(eventLines, "(no recent events)")
+	}
+	for _, event := range limitAlertEvents(state.RecentEvents, 4) {
+		eventLines = append(eventLines, fmt.Sprintf("[%s] %s", event.EventType, shorten(event.Message, max(28, layout.rightContentWidth-14))))
 	}
 
-	lines = append(lines, "", "Keys: j/k move, enter detail, a add, p pause, u resume, x archive, r refresh, q quit")
-	return strings.Join(lines, "\n")
+	left := lipgloss.JoinVertical(lipgloss.Left,
+		renderPanel("Runtime", formatRuntimeStatus(state.RuntimeStatus), layout.leftWidth, false),
+		"",
+		renderPanel("Tracked Keywords", keywordLines, layout.leftWidth, focus == dashboardFocusKeywords),
+	)
+
+	rightItems := []string{
+		renderPanel("Selected Snapshot", snapshotLines, layout.rightWidth, false),
+		"",
+		renderPanel("Top Deals", dealLines, layout.rightWidth, focus == dashboardFocusDeals),
+	}
+	if len(state.RecentEvents) > 0 {
+		rightItems = append(rightItems, "", renderPanel("Recent Events", eventLines, layout.rightWidth, false))
+	}
+	if adding {
+		rightItems = append([]string{
+			renderPanel("Add Keyword", []string{
+				fmt.Sprintf("Input: %s", input),
+				"Enter to save, esc to cancel",
+			}, layout.rightWidth, false),
+			"",
+		}, rightItems...)
+	}
+	right := lipgloss.JoinVertical(lipgloss.Left, rightItems...)
+	body := joinColumns(layout, left, right)
+
+	return lipgloss.JoinVertical(lipgloss.Left,
+		header,
+		"",
+		body,
+		"",
+		renderFooter("tab focus", "j/k move", "enter open/detail", "s scan-now", "a add", "p pause", "u resume", "x archive", "r refresh", "q quit"),
+	)
 }
 
 func formatRuntimeStatus(status *dto.RuntimeStatusSummary) []string {
 	if status == nil {
-		return []string{"  (runtime status unavailable)"}
+		return []string{"(runtime status unavailable)"}
 	}
 
 	accepting := "no"
@@ -692,73 +933,71 @@ func formatRuntimeStatus(status *dto.RuntimeStatusSummary) []string {
 	}
 
 	lines := []string{
-		fmt.Sprintf("  Accepting New Work: %s", accepting),
-		fmt.Sprintf("  Running: %d / %d", status.RunningCount, status.MaxConcurrent),
+		fmt.Sprintf("Accepting New Work: %s", accepting),
+		fmt.Sprintf("Running: %d / %d", status.RunningCount, status.MaxConcurrent),
 	}
 
 	if status.ReconciledRunningJobs > 0 {
-		lines = append(lines, fmt.Sprintf("  Startup Reconciled: %d running job(s)", status.ReconciledRunningJobs))
+		lines = append(lines, fmt.Sprintf("Startup Reconciled: %d running job(s)", status.ReconciledRunningJobs))
 	}
 	if status.PrunedRawListings > 0 {
-		lines = append(lines, fmt.Sprintf("  Startup Pruned Raw Listings: %d", status.PrunedRawListings))
+		lines = append(lines, fmt.Sprintf("Startup Pruned Raw Listings: %d", status.PrunedRawListings))
 	}
 	if status.PrunedAlertEvents > 0 {
-		lines = append(lines, fmt.Sprintf("  Startup Pruned Alert Events: %d", status.PrunedAlertEvents))
+		lines = append(lines, fmt.Sprintf("Startup Pruned Alert Events: %d", status.PrunedAlertEvents))
 	}
 
 	return lines
 }
 
-func renderDetail(detail *dto.KeywordDetail, loading bool, status string, editingField editField, editInput string) string {
+func renderDetail(detail *dto.KeywordDetail, width int, loading bool, status string, editingField editField, editInput string, focus detailFocus, dealIndex int) string {
 	if detail == nil {
 		return fmt.Sprintf("PriceAlert\n\nStatus: %s", status)
 	}
 
-	var lines []string
-	lines = append(lines, "PriceAlert", "", "Keyword Detail", "")
-	lines = append(lines, fmt.Sprintf("Status: %s", status))
-	if loading {
-		lines = append(lines, "Loading: yes")
+	layout := computeLayout(width)
+	header := renderHeader("Keyword Detail", renderStatusLine(status, loading), layout.headerWidth)
+
+	keywordLines := []string{
+		formatKeyValue("Keyword", shorten(detail.Keyword.Keyword, max(20, layout.leftContentWidth-12))),
+		formatKeyValue("Status", detail.Keyword.Status),
+		formatKeyValue("Interval", fmt.Sprintf("%d min", detail.Keyword.IntervalMinutes)),
+		formatKeyValue("Threshold", formatPrice(detail.Keyword.ThresholdPrice)),
+		formatKeyValue("Basic Filter", formatOptionalString(detail.Keyword.BasicFilter)),
+		filterHintStyle.Render("Syntax: token token -exclude"),
+		formatKeyValue("Telegram", fmt.Sprintf("%t", detail.Keyword.TelegramEnabled)),
 	}
-	lines = append(lines, "")
-	lines = append(lines, fmt.Sprintf("Keyword: %s", detail.Keyword.Keyword))
-	lines = append(lines, fmt.Sprintf("Status: %s", detail.Keyword.Status))
-	lines = append(lines, fmt.Sprintf("Interval: %d min", detail.Keyword.IntervalMinutes))
-	lines = append(lines, fmt.Sprintf("Threshold: %s", formatPrice(detail.Keyword.ThresholdPrice)))
-	lines = append(lines, fmt.Sprintf("Basic Filter: %s", formatOptionalString(detail.Keyword.BasicFilter)))
-	lines = append(lines, fmt.Sprintf("Telegram Enabled: %t", detail.Keyword.TelegramEnabled))
 	if editingField != editFieldNone {
-		lines = append(lines, fmt.Sprintf("Editing %s: %s", editingFieldLabel(editingField), editInput))
-		lines = append(lines, "Press enter to save, esc to cancel")
+		keywordLines = append(keywordLines,
+			formatKeyValue("Editing "+editingFieldLabel(editingField), editInput),
+			"Enter to save, esc to cancel",
+		)
 	}
 
-	lines = append(lines, "", "Snapshot:")
+	snapshotLines := []string{"(no snapshot yet)"}
 	if detail.Snapshot == nil {
-		lines = append(lines, "  (no snapshot yet)")
 	} else {
-		lines = append(lines, fmt.Sprintf("  Signal: %s", detail.Snapshot.Signal))
-		lines = append(lines, fmt.Sprintf("  Min/Avg/Max: %s / %s / %s",
-			formatPrice(detail.Snapshot.MinPrice),
-			formatPrice(detail.Snapshot.AvgPrice),
-			formatPrice(detail.Snapshot.MaxPrice),
-		))
-	}
-
-	lines = append(lines, "", "Top Deals:")
-	if len(detail.TopDeals) == 0 {
-		lines = append(lines, "  (no grouped listings)")
-	} else {
-		for _, deal := range detail.TopDeals {
-			lines = append(lines, fmt.Sprintf("  - %s | %s | %d listings", deal.RepresentativeTitle, formatPrice(&deal.BestPrice), deal.ListingCount))
+		snapshotLines = []string{
+			formatKeyValue("Signal", formatSignal(detail.Snapshot.Signal)),
+			formatKeyValue("Min / Avg / Max", fmt.Sprintf("%s / %s / %s",
+				formatPrice(detail.Snapshot.MinPrice),
+				formatPrice(detail.Snapshot.AvgPrice),
+				formatPrice(detail.Snapshot.MaxPrice),
+			)),
+			formatKeyValue("Raw / Grouped", fmt.Sprintf("%d / %d", detail.Snapshot.RawCount, detail.Snapshot.GroupedCount)),
+			formatKeyValue("At", formatTimestamp(&detail.Snapshot.SnapshotAt)),
 		}
 	}
 
-	lines = append(lines, "", "Recent History:")
+	dealLines := formatDetailDeals(detail.TopDeals, dealIndex, focus == detailFocusDeals, max(30, layout.rightContentWidth-10))
+
+	historyLines := []string{"(no price history)"}
 	if len(detail.RecentHistory) == 0 {
-		lines = append(lines, "  (no price history)")
 	} else {
-		for _, point := range detail.RecentHistory {
-			lines = append(lines, fmt.Sprintf("  - %s / %s / %s",
+		historyLines = nil
+		for _, point := range limitPricePoints(detail.RecentHistory, 5) {
+			historyLines = append(historyLines, fmt.Sprintf("%s | %s / %s / %s",
+				formatTimestamp(&point.RecordedAt),
 				formatPrice(point.MinPrice),
 				formatPrice(point.AvgPrice),
 				formatPrice(point.MaxPrice),
@@ -766,24 +1005,93 @@ func renderDetail(detail *dto.KeywordDetail, loading bool, status string, editin
 		}
 	}
 
-	lines = append(lines, "", "Recent Events:")
+	eventLines := []string{"(no recent events)"}
 	if len(detail.RecentEvents) == 0 {
-		lines = append(lines, "  (no recent events)")
 	} else {
-		for _, event := range detail.RecentEvents {
-			lines = append(lines, fmt.Sprintf("  - [%s] %s", event.EventType, event.Message))
+		eventLines = nil
+		for _, event := range limitAlertEvents(detail.RecentEvents, 4) {
+			eventLines = append(eventLines, fmt.Sprintf("[%s] %s", event.EventType, shorten(event.Message, max(28, layout.rightContentWidth-14))))
 		}
 	}
 
-	lines = append(lines, "", "Keys: esc back, p pause, u resume, x archive, t telegram, 1 threshold, 2 interval, 3 filter, r refresh, q quit")
-	return strings.Join(lines, "\n")
+	left := lipgloss.JoinVertical(lipgloss.Left,
+		renderPanel("Keyword", keywordLines, layout.leftWidth, false),
+		"",
+		renderPanel("Snapshot", snapshotLines, layout.leftWidth, false),
+	)
+	right := lipgloss.JoinVertical(lipgloss.Left,
+		renderPanel("Top Deals", dealLines, layout.rightWidth, focus == detailFocusDeals),
+		"",
+		renderPanel("Recent History", historyLines, layout.rightWidth, focus == detailFocusHistory),
+	)
+	if len(detail.RecentEvents) > 0 {
+		right = lipgloss.JoinVertical(lipgloss.Left, right, "", renderPanel("Recent Events", eventLines, layout.rightWidth, false))
+	}
+	body := joinColumns(layout, left, right)
+
+	return lipgloss.JoinVertical(lipgloss.Left,
+		header,
+		"",
+		body,
+		"",
+		renderFooter("tab focus", "j/k move", "enter open", "s scan-now", "esc back", "p pause", "u resume", "x archive", "t telegram", "1 threshold", "2 interval", "3 filter", "r refresh", "q quit"),
+	)
+}
+
+func renderStatusLine(status string, loading bool) string {
+	if loading {
+		return fmt.Sprintf("Status: %s  [loading]", status)
+	}
+	return fmt.Sprintf("Status: %s", status)
+}
+
+func renderHeader(screen, status string, width int) string {
+	title := lipgloss.JoinHorizontal(lipgloss.Left,
+		appTitleStyle.Render("PriceAlert"),
+		" ",
+		screenTitleStyle.Render(screen),
+	)
+	return lipgloss.JoinVertical(lipgloss.Left, title, headerBarStyle.Render(strings.Repeat("─", max(24, width))), statusStyle.Render(status))
+}
+
+func renderPanel(title string, lines []string, width int, focused bool) string {
+	section := []string{panelTitleStyle.Render(title), ""}
+	if len(lines) == 0 {
+		section = append(section, "-")
+		return panelBoxStyle(focused, width).Render(strings.Join(section, "\n"))
+	}
+	for _, line := range lines {
+		if line == "" {
+			continue
+		}
+		section = append(section, line)
+	}
+	return panelBoxStyle(focused, width).Render(strings.Join(section, "\n"))
+}
+
+func renderFooter(items ...string) string {
+	return footerStyle.Render("Keys: " + strings.Join(items, " | "))
+}
+
+func formatKeyValue(label, value string) string {
+	return keyLabelStyle.Render(label+":") + " " + value
+}
+
+func shorten(value string, max int) string {
+	if max <= 0 || len(value) <= max {
+		return value
+	}
+	if max <= 3 {
+		return value[:max]
+	}
+	return value[:max-3] + "..."
 }
 
 func formatPrice(value *int64) string {
 	if value == nil {
 		return "-"
 	}
-	return fmt.Sprintf("%d", *value)
+	return formatInt64(*value)
 }
 
 func formatOptionalString(value *string) string {
@@ -851,4 +1159,265 @@ func parseRequiredPositiveInt(value string) (int, error) {
 		return 0, fmt.Errorf("interval minutes must be a positive integer")
 	}
 	return parsed, nil
+}
+
+var (
+	appTitleStyle        = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("230")).Background(lipgloss.Color("25")).Padding(0, 1)
+	screenTitleStyle     = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("111"))
+	headerBarStyle       = lipgloss.NewStyle().Foreground(lipgloss.Color("61"))
+	statusStyle          = lipgloss.NewStyle().Foreground(lipgloss.Color("252"))
+	panelStyle           = lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(lipgloss.Color("61")).Padding(0, 1)
+	panelTitleStyle      = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("229"))
+	footerStyle          = lipgloss.NewStyle().Foreground(lipgloss.Color("245"))
+	keyLabelStyle        = lipgloss.NewStyle().Foreground(lipgloss.Color("248")).Bold(true)
+	metaStyle            = lipgloss.NewStyle().Foreground(lipgloss.Color("246"))
+	focusedMetaStyle     = lipgloss.NewStyle().Foreground(lipgloss.Color("223"))
+	filterHintStyle      = lipgloss.NewStyle().Foreground(lipgloss.Color("244")).Italic(true)
+	selectedBulletStyle  = lipgloss.NewStyle().Foreground(lipgloss.Color("86")).Bold(true)
+	selectedKeywordStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("230")).Bold(true)
+	alertBadgeStyle      = lipgloss.NewStyle().Foreground(lipgloss.Color("230")).Background(lipgloss.Color("160")).Padding(0, 1)
+	buyNowSignalStyle    = lipgloss.NewStyle().Foreground(lipgloss.Color("230")).Background(lipgloss.Color("160")).Bold(true).Padding(0, 1)
+	goodDealSignalStyle  = lipgloss.NewStyle().Foreground(lipgloss.Color("232")).Background(lipgloss.Color("214")).Bold(true).Padding(0, 1)
+	normalSignalStyle    = lipgloss.NewStyle().Foreground(lipgloss.Color("232")).Background(lipgloss.Color("110")).Padding(0, 1)
+	noDataSignalStyle    = lipgloss.NewStyle().Foreground(lipgloss.Color("252")).Background(lipgloss.Color("238")).Padding(0, 1)
+)
+
+func selectedKeywordText(selected bool, value string) string {
+	if !selected {
+		return value
+	}
+	return selectedKeywordStyle.Render(value)
+}
+
+func formatSignal(signal string) string {
+	switch signal {
+	case "BUY_NOW":
+		return buyNowSignalStyle.Render(signal)
+	case "GOOD_DEAL":
+		return goodDealSignalStyle.Render(signal)
+	case "NORMAL":
+		return normalSignalStyle.Render(signal)
+	case "NO_DATA":
+		return noDataSignalStyle.Render(signal)
+	default:
+		return signal
+	}
+}
+
+func formatTimestamp(value *time.Time) string {
+	if value == nil {
+		return "-"
+	}
+	return value.Local().Format("2006-01-02 15:04")
+}
+
+func summarizeTopDeals(deals []dto.GroupedListing, limit int, titleWidth int) []string {
+	if len(deals) == 0 {
+		return []string{"(no grouped listings)"}
+	}
+	lines := make([]string, 0, limit*2)
+	for _, deal := range limitGroupedListings(deals, limit) {
+		lines = append(lines, shorten(deal.RepresentativeTitle, titleWidth))
+		lines = append(lines, metaStyle.Render(fmt.Sprintf("%s  |  %s", formatPrice(&deal.BestPrice), shorten(deal.RepresentativeSeller, min(24, max(12, titleWidth/3))))))
+		lines = append(lines, "")
+	}
+	return trimTrailingBlank(lines)
+}
+
+func summarizeDetailedDeals(deals []dto.GroupedListing, limit int, titleWidth int) []string {
+	if len(deals) == 0 {
+		return []string{"(no grouped listings)"}
+	}
+	lines := make([]string, 0, limit*2)
+	for _, deal := range limitGroupedListings(deals, limit) {
+		lines = append(lines, shorten(deal.RepresentativeTitle, titleWidth))
+		lines = append(lines, metaStyle.Render(fmt.Sprintf("%s  |  %s  |  %d listing(s)", shorten(deal.RepresentativeSeller, min(20, max(10, titleWidth/4))), formatPrice(&deal.BestPrice), deal.ListingCount)))
+		lines = append(lines, "")
+	}
+	return trimTrailingBlank(lines)
+}
+
+func formatDashboardDeals(deals []dto.GroupedListing, selectedIndex int, focused bool, titleWidth int) []string {
+	return formatDealLines(limitGroupedListings(deals, 5), selectedIndex, focused, titleWidth, false)
+}
+
+func formatDetailDeals(deals []dto.GroupedListing, selectedIndex int, focused bool, titleWidth int) []string {
+	return formatDealLines(limitGroupedListings(deals, 5), selectedIndex, focused, titleWidth, true)
+}
+
+func formatDealLines(deals []dto.GroupedListing, selectedIndex int, focused bool, titleWidth int, includeCount bool) []string {
+	if len(deals) == 0 {
+		return []string{"(no grouped listings)"}
+	}
+	lines := make([]string, 0, len(deals)*3)
+	for i, deal := range deals {
+		prefix := "  "
+		title := shorten(deal.RepresentativeTitle, titleWidth)
+		meta := fmt.Sprintf("%s  |  %s", formatPrice(&deal.BestPrice), shorten(deal.RepresentativeSeller, min(24, max(12, titleWidth/3))))
+		if includeCount {
+			meta = fmt.Sprintf("%s  |  %s  |  %d listing(s)", shorten(deal.RepresentativeSeller, min(20, max(10, titleWidth/4))), formatPrice(&deal.BestPrice), deal.ListingCount)
+		}
+		if i == selectedIndex {
+			prefix = selectedBulletStyle.Render("▶ ")
+			if focused {
+				title = selectedKeywordStyle.Render(title)
+				meta = focusedMetaStyle.Render(meta)
+			}
+		}
+		lines = append(lines, prefix+title)
+		lines = append(lines, "  "+meta)
+		lines = append(lines, "")
+	}
+	return trimTrailingBlank(lines)
+}
+
+func limitGroupedListings(items []dto.GroupedListing, limit int) []dto.GroupedListing {
+	if limit <= 0 || len(items) <= limit {
+		return items
+	}
+	return items[:limit]
+}
+
+func limitAlertEvents(items []dto.AlertEvent, limit int) []dto.AlertEvent {
+	if limit <= 0 || len(items) <= limit {
+		return items
+	}
+	return items[:limit]
+}
+
+func limitPricePoints(items []dto.PricePoint, limit int) []dto.PricePoint {
+	if limit <= 0 || len(items) <= limit {
+		return items
+	}
+	return items[:limit]
+}
+
+func formatInt64(value int64) string {
+	sign := ""
+	if value < 0 {
+		sign = "-"
+		value = -value
+	}
+	raw := strconv.FormatInt(value, 10)
+	if len(raw) <= 3 {
+		return sign + raw
+	}
+	parts := make([]string, 0, (len(raw)+2)/3)
+	for len(raw) > 3 {
+		parts = append([]string{raw[len(raw)-3:]}, parts...)
+		raw = raw[:len(raw)-3]
+	}
+	parts = append([]string{raw}, parts...)
+	return sign + strings.Join(parts, ".")
+}
+
+type layoutDimensions struct {
+	stacked           bool
+	headerWidth       int
+	leftWidth         int
+	rightWidth        int
+	leftContentWidth  int
+	rightContentWidth int
+}
+
+func computeLayout(width int) layoutDimensions {
+	if width <= 0 {
+		width = 120
+	}
+	contentWidth := max(72, width-4)
+	if contentWidth < 112 {
+		panelWidth := contentWidth - 2
+		return layoutDimensions{
+			stacked:           true,
+			headerWidth:       contentWidth,
+			leftWidth:         panelWidth,
+			rightWidth:        panelWidth,
+			leftContentWidth:  panelWidth - 4,
+			rightContentWidth: panelWidth - 4,
+		}
+	}
+
+	leftWidth := max(30, min(42, contentWidth/3))
+	rightWidth := max(40, contentWidth-leftWidth-2)
+	return layoutDimensions{
+		headerWidth:       contentWidth,
+		leftWidth:         leftWidth,
+		rightWidth:        rightWidth,
+		leftContentWidth:  leftWidth - 4,
+		rightContentWidth: rightWidth - 4,
+	}
+}
+
+func joinColumns(layout layoutDimensions, left string, right string) string {
+	if layout.stacked {
+		return lipgloss.JoinVertical(lipgloss.Left, left, "", right)
+	}
+	return lipgloss.JoinHorizontal(lipgloss.Top, left, "  ", right)
+}
+
+func trimTrailingBlank(lines []string) []string {
+	for len(lines) > 0 && lines[len(lines)-1] == "" {
+		lines = lines[:len(lines)-1]
+	}
+	return lines
+}
+
+func nextDashboardFocus(current dashboardFocus) dashboardFocus {
+	switch current {
+	case dashboardFocusDeals:
+		return dashboardFocusKeywords
+	default:
+		return dashboardFocusDeals
+	}
+}
+
+func nextDetailFocus(current detailFocus) detailFocus {
+	switch current {
+	case detailFocusHistory:
+		return detailFocusDeals
+	default:
+		return detailFocusHistory
+	}
+}
+
+func clampIndex(index, length int) int {
+	if length <= 0 {
+		return 0
+	}
+	if index < 0 {
+		return 0
+	}
+	if index >= length {
+		return length - 1
+	}
+	return index
+}
+
+func panelBoxStyle(focused bool, width int) lipgloss.Style {
+	style := panelStyle.Width(max(20, width))
+	if focused {
+		return style.BorderForeground(lipgloss.Color("86"))
+	}
+	return style
+}
+
+func openURLCmd(opener BrowserOpener, url string) tea.Cmd {
+	return func() tea.Msg {
+		if opener == nil {
+			opener = systemBrowserOpener{}
+		}
+		return openURLDoneMsg{
+			url: url,
+			err: opener.OpenURL(context.Background(), url),
+		}
+	}
+}
+
+type systemBrowserOpener struct{}
+
+func (systemBrowserOpener) OpenURL(ctx context.Context, url string) error {
+	if strings.TrimSpace(url) == "" {
+		return fmt.Errorf("empty url")
+	}
+	return exec.CommandContext(ctx, "xdg-open", url).Start()
 }

@@ -3,6 +3,7 @@ package scan
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/pricealert/pricealert/internal/domain"
@@ -109,6 +110,7 @@ func (s *Service) Execute(ctx context.Context, keyword domain.TrackedKeyword) (*
 	}
 
 	rawListings = s.prepareRawListings(scanJob.ID, rawListings)
+	rawListings = s.applyBasicFilter(keyword.BasicFilter, rawListings)
 	if err := s.rawListings.CreateBatch(ctx, rawListings); err != nil {
 		_ = s.scanJobs.MarkFailed(ctx, scanJob.ID, err.Error())
 		return nil, fmt.Errorf("persist raw listings: %w", err)
@@ -209,4 +211,97 @@ func (s *Service) assignGroupedListingIDs(listings []domain.GroupedListing) []do
 	}
 
 	return listings
+}
+
+func (s *Service) applyBasicFilter(basicFilter *string, listings []domain.RawListing) []domain.RawListing {
+	if basicFilter == nil {
+		return listings
+	}
+
+	includeTokens, excludeTokens := parseBasicFilterTokens(*basicFilter)
+	if len(includeTokens) == 0 && len(excludeTokens) == 0 {
+		return listings
+	}
+
+	filtered := make([]domain.RawListing, 0, len(listings))
+	for _, listing := range listings {
+		if matchesBasicFilter(listing.NormalizedTitle, includeTokens, excludeTokens) {
+			filtered = append(filtered, listing)
+		}
+	}
+
+	return filtered
+}
+
+func parseBasicFilterTokens(rawFilter string) ([]string, []string) {
+	rawTokens := strings.Fields(strings.TrimSpace(rawFilter))
+	include := make([]string, 0, len(rawTokens))
+	exclude := make([]string, 0, len(rawTokens))
+
+	for index := 0; index < len(rawTokens); index++ {
+		token := rawTokens[index]
+		if token == "-" {
+			if index+1 >= len(rawTokens) {
+				continue
+			}
+			index++
+			normalized := normalizeBasicFilterToken(rawTokens[index])
+			if normalized != "" {
+				exclude = append(exclude, normalized)
+			}
+			continue
+		}
+		if strings.HasPrefix(token, "-") && len(token) > 1 {
+			normalized := normalizeBasicFilterToken(token[1:])
+			if normalized != "" {
+				exclude = append(exclude, normalized)
+			}
+			continue
+		}
+		normalized := normalizeBasicFilterToken(token)
+		if normalized != "" {
+			include = append(include, normalized)
+		}
+	}
+
+	return include, exclude
+}
+
+func normalizeBasicFilterToken(token string) string {
+	normalized := grouping.NormalizeTitle(token)
+	parts := strings.Fields(normalized)
+	if len(parts) == 0 {
+		return ""
+	}
+	return parts[0]
+}
+
+func matchesBasicFilter(normalizedTitle string, includeTokens, excludeTokens []string) bool {
+	if len(includeTokens) == 0 && len(excludeTokens) == 0 {
+		return true
+	}
+
+	titleTokens := strings.Fields(normalizedTitle)
+	if len(titleTokens) == 0 {
+		return false
+	}
+
+	tokenSet := make(map[string]struct{}, len(titleTokens))
+	for _, token := range titleTokens {
+		tokenSet[token] = struct{}{}
+	}
+
+	for _, token := range includeTokens {
+		if _, ok := tokenSet[token]; !ok {
+			return false
+		}
+	}
+
+	for _, token := range excludeTokens {
+		if _, ok := tokenSet[token]; ok {
+			return false
+		}
+	}
+
+	return true
 }

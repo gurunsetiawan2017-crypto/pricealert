@@ -85,12 +85,16 @@ func (a *App) Run() error {
 		_ = a.db.Close()
 	}()
 
-	_, err := newTUIProgram(a.queries, newRuntimeTrigger(a), newKeywordActions(a.keywords)).Run()
+	_, err := newTUIProgram(a.queries, newRuntimeTrigger(a), newBrowserOpener(), newKeywordActions(a.keywords)).Run()
 	return err
 }
 
 func (a *App) RunRuntimeOnce(ctx context.Context) (rtscheduler.RunResult, error) {
 	return a.runtime.RunOnce(ctx)
+}
+
+func (a *App) ScanKeywordNow(ctx context.Context, keywordID string) error {
+	return a.runtime.ScanKeywordNow(ctx, keywordID)
 }
 
 func (a *App) RuntimeStatus() RuntimeStatus {

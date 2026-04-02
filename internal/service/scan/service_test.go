@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 
@@ -241,6 +242,75 @@ func TestExecuteDispatchesAlertNotificationsAfterPersist(t *testing.T) {
 	}
 }
 
+func TestExecuteAppliesBasicFilterBeforePersistAndGrouping(t *testing.T) {
+	clock := &stubClock{
+		times: []time.Time{
+			time.Date(2026, 4, 2, 10, 0, 0, 0, time.UTC),
+			time.Date(2026, 4, 2, 10, 0, 5, 0, time.UTC),
+			time.Date(2026, 4, 2, 10, 0, 10, 0, time.UTC),
+			time.Date(2026, 4, 2, 10, 0, 15, 0, time.UTC),
+		},
+	}
+	ids := &stubIDs{values: []string{"scan_1", "raw_1", "raw_2", "raw_3", "grp_1", "snap_1", "pp_1"}}
+	scanJobs := &fakeScanJobRepo{}
+	rawRepo := &fakeRawListingRepo{}
+	groupedRepo := &fakeGroupedListingRepo{}
+	snapshotRepo := &fakeSnapshotRepo{}
+	pricePointRepo := &fakePricePointRepo{}
+	alertRepo := &fakeAlertEventRepo{}
+
+	service := NewService(
+		stubScraper{
+			listings: []domain.RawListing{
+				{Title: "Raspberry Pi 3 ABS Plastic Case", SellerName: "Seller A", Price: 44990, URL: "https://example.com/1", Source: "tokopedia"},
+				{Title: "Raspberry Pi 3 Metal Case", SellerName: "Seller B", Price: 157694, URL: "https://example.com/2", Source: "tokopedia"},
+				{Title: "Raspberry Pi 3 Board Only", SellerName: "Seller C", Price: 588948, URL: "https://example.com/3", Source: "tokopedia"},
+			},
+		},
+		nil,
+		ids,
+		clock,
+		scanJobs,
+		rawRepo,
+		groupedRepo,
+		snapshotRepo,
+		pricePointRepo,
+		alertRepo,
+		grouping.NewService(),
+		snapshot.NewService(),
+		history.NewService(),
+		alert.NewService(),
+	)
+
+	filter := "case"
+	result, err := service.Execute(context.Background(), domain.TrackedKeyword{
+		ID:          "kw_1",
+		Keyword:     "Raspberry Pi 3",
+		BasicFilter: &filter,
+	})
+	if err != nil {
+		t.Fatalf("Execute() error = %v", err)
+	}
+
+	if len(rawRepo.created) != 2 {
+		t.Fatalf("raw listings persisted = %d, want 2", len(rawRepo.created))
+	}
+	if len(groupedRepo.created) != 2 {
+		t.Fatalf("grouped listings persisted = %d, want 2", len(groupedRepo.created))
+	}
+	if scanJobs.markSuccessRawCount != 2 {
+		t.Fatalf("mark success raw count = %d, want 2", scanJobs.markSuccessRawCount)
+	}
+	if result.Snapshot.RawCount != 2 || result.Snapshot.GroupedCount != 2 {
+		t.Fatalf("snapshot counts = raw %d grouped %d, want 2/2", result.Snapshot.RawCount, result.Snapshot.GroupedCount)
+	}
+	for _, listing := range rawRepo.created {
+		if !strings.Contains(listing.NormalizedTitle, "case") {
+			t.Fatalf("unexpected filtered listing title = %q", listing.NormalizedTitle)
+		}
+	}
+}
+
 type stubScraper struct {
 	listings []domain.RawListing
 	err      error
@@ -455,5 +525,106 @@ func TestPrepareRawListingsSetsDefaults(t *testing.T) {
 
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("prepareRawListings() = %#v, want %#v", got, want)
+	}
+}
+
+func TestApplyBasicFilterMatchesAllNormalizedTokens(t *testing.T) {
+	service := NewService(
+		stubScraper{},
+		nil,
+		&stubIDs{},
+		&stubClock{},
+		&fakeScanJobRepo{},
+		&fakeRawListingRepo{},
+		&fakeGroupedListingRepo{},
+		&fakeSnapshotRepo{},
+		&fakePricePointRepo{},
+		&fakeAlertEventRepo{},
+		grouping.NewService(),
+		snapshot.NewService(),
+		history.NewService(),
+		alert.NewService(),
+	)
+
+	filter := "raspberry case"
+	listings := []domain.RawListing{
+		{NormalizedTitle: "raspberry pi 3 abs plastic case"},
+		{NormalizedTitle: "raspberry pi 3 board only"},
+		{NormalizedTitle: "plastic case for orange pi"},
+	}
+
+	got := service.applyBasicFilter(&filter, listings)
+	if len(got) != 1 {
+		t.Fatalf("filtered listings = %d, want 1", len(got))
+	}
+	if got[0].NormalizedTitle != "raspberry pi 3 abs plastic case" {
+		t.Fatalf("filtered title = %q", got[0].NormalizedTitle)
+	}
+}
+
+func TestApplyBasicFilterExcludesMinusPrefixedTokens(t *testing.T) {
+	service := NewService(
+		stubScraper{},
+		nil,
+		&stubIDs{},
+		&stubClock{},
+		&fakeScanJobRepo{},
+		&fakeRawListingRepo{},
+		&fakeGroupedListingRepo{},
+		&fakeSnapshotRepo{},
+		&fakePricePointRepo{},
+		&fakeAlertEventRepo{},
+		grouping.NewService(),
+		snapshot.NewService(),
+		history.NewService(),
+		alert.NewService(),
+	)
+
+	filter := "case -metal"
+	listings := []domain.RawListing{
+		{NormalizedTitle: "raspberry pi 3 abs plastic case"},
+		{NormalizedTitle: "raspberry pi 3 metal case"},
+		{NormalizedTitle: "raspberry pi 3 board only"},
+	}
+
+	got := service.applyBasicFilter(&filter, listings)
+	if len(got) != 1 {
+		t.Fatalf("filtered listings = %d, want 1", len(got))
+	}
+	if got[0].NormalizedTitle != "raspberry pi 3 abs plastic case" {
+		t.Fatalf("filtered title = %q", got[0].NormalizedTitle)
+	}
+}
+
+func TestApplyBasicFilterExcludesTokensWithSeparatedMinus(t *testing.T) {
+	service := NewService(
+		stubScraper{},
+		nil,
+		&stubIDs{},
+		&stubClock{},
+		&fakeScanJobRepo{},
+		&fakeRawListingRepo{},
+		&fakeGroupedListingRepo{},
+		&fakeSnapshotRepo{},
+		&fakePricePointRepo{},
+		&fakeAlertEventRepo{},
+		grouping.NewService(),
+		snapshot.NewService(),
+		history.NewService(),
+		alert.NewService(),
+	)
+
+	filter := "- fan"
+	listings := []domain.RawListing{
+		{NormalizedTitle: "high quality specified dc brushless cooling fan for raspberry pi 2 3 4"},
+		{NormalizedTitle: "raspberry pi 3 abs plastic case"},
+	}
+
+	got := service.applyBasicFilter(&filter, listings)
+	if len(got) != 1 {
+		t.Fatalf("filtered listings = %d, want 1", len(got))
+	}
+	if got[0].NormalizedTitle != "raspberry pi 3 abs plastic case" {
+		t.Fatalf("filtered title = %q", got[0].NormalizedTitle)
 	}
 }
