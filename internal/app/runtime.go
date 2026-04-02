@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"time"
 
@@ -17,6 +18,28 @@ import (
 	"github.com/pricealert/pricealert/internal/service/scan"
 	"github.com/pricealert/pricealert/internal/service/snapshot"
 )
+
+type appRepositories struct {
+	trackedKeywords repository.TrackedKeywordRepository
+	scanJobs        repository.ScanJobRepository
+	rawListings     repository.RawListingRepository
+	groupedListings repository.GroupedListingRepository
+	snapshots       repository.MarketSnapshotRepository
+	pricePoints     repository.PricePointRepository
+	alertEvents     repository.AlertEventRepository
+}
+
+func newAppRepositories(db *sql.DB) appRepositories {
+	return appRepositories{
+		trackedKeywords: repository.NewMariaDBTrackedKeywordRepository(db),
+		scanJobs:        repository.NewMariaDBScanJobRepository(db),
+		rawListings:     repository.NewMariaDBRawListingRepository(db),
+		groupedListings: repository.NewMariaDBGroupedListingRepository(db),
+		snapshots:       repository.NewMariaDBMarketSnapshotRepository(db),
+		pricePoints:     repository.NewMariaDBPricePointRepository(db),
+		alertEvents:     repository.NewMariaDBAlertEventRepository(db),
+	}
+}
 
 type Runtime struct {
 	scheduler *rtscheduler.Scheduler
@@ -59,26 +82,18 @@ func (unsupportedScraper) FetchListings(context.Context, domain.TrackedKeyword) 
 	return nil, errors.New("tokopedia scraper not implemented yet")
 }
 
-func newRuntime(
-	trackedKeywords repository.TrackedKeywordRepository,
-	scanJobs repository.ScanJobRepository,
-	rawListings repository.RawListingRepository,
-	groupedListings repository.GroupedListingRepository,
-	snapshots repository.MarketSnapshotRepository,
-	pricePoints repository.PricePointRepository,
-	alertEvents repository.AlertEventRepository,
-) *Runtime {
+func newRuntime(repos appRepositories) *Runtime {
 	clock := systemClock{}
 	scanService := scan.NewService(
 		unsupportedScraper{},
 		idgen.NewULIDGenerator(),
 		clock,
-		scanJobs,
-		rawListings,
-		groupedListings,
-		snapshots,
-		pricePoints,
-		alertEvents,
+		repos.scanJobs,
+		repos.rawListings,
+		repos.groupedListings,
+		repos.snapshots,
+		repos.pricePoints,
+		repos.alertEvents,
 		grouping.NewService(),
 		snapshot.NewService(),
 		history.NewService(),
@@ -87,7 +102,7 @@ func newRuntime(
 
 	stateStore := rtstate.NewStore()
 	worker := rtworker.New(stateStore, scanExecutorAdapter{scan: scanService}, clock)
-	scheduler := rtscheduler.New(trackedKeywordSourceAdapter{repo: trackedKeywords}, stateStore, worker, clock)
+	scheduler := rtscheduler.New(trackedKeywordSourceAdapter{repo: repos.trackedKeywords}, stateStore, worker, clock)
 
 	return &Runtime{scheduler: scheduler}
 }

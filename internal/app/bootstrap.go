@@ -6,25 +6,18 @@ import (
 
 	"github.com/pricealert/pricealert/internal/config"
 	infraDB "github.com/pricealert/pricealert/internal/infra/db"
-	"github.com/pricealert/pricealert/internal/repository"
 	rtscheduler "github.com/pricealert/pricealert/internal/runtime/scheduler"
 )
 
-// App is a thin bootstrap shell for milestone A.
+// App wires the current local runtime foundation and shared infrastructure.
 type App struct {
 	cfg        config.Config
 	db         *sql.DB
 	dbConfig   infraDB.ConnectionConfig
 	migrations []infraDB.Migration
 
-	trackedKeywords repository.TrackedKeywordRepository
-	scanJobs        repository.ScanJobRepository
-	rawListings     repository.RawListingRepository
-	groupedListings repository.GroupedListingRepository
-	snapshots       repository.MarketSnapshotRepository
-	pricePoints     repository.PricePointRepository
-	alertEvents     repository.AlertEventRepository
-	runtime         *Runtime
+	repos   appRepositories
+	runtime *Runtime
 }
 
 func New(cfg config.Config) (*App, error) {
@@ -43,43 +36,25 @@ func New(cfg config.Config) (*App, error) {
 		return nil, err
 	}
 
+	repos := newAppRepositories(db)
+
 	return &App{
-		cfg:             cfg,
-		db:              db,
-		dbConfig:        dbConfig,
-		migrations:      migrations,
-		trackedKeywords: repository.NewMariaDBTrackedKeywordRepository(db),
-		scanJobs:        repository.NewMariaDBScanJobRepository(db),
-		rawListings:     repository.NewMariaDBRawListingRepository(db),
-		groupedListings: repository.NewMariaDBGroupedListingRepository(db),
-		snapshots:       repository.NewMariaDBMarketSnapshotRepository(db),
-		pricePoints:     repository.NewMariaDBPricePointRepository(db),
-		alertEvents:     repository.NewMariaDBAlertEventRepository(db),
-		runtime: newRuntime(
-			repository.NewMariaDBTrackedKeywordRepository(db),
-			repository.NewMariaDBScanJobRepository(db),
-			repository.NewMariaDBRawListingRepository(db),
-			repository.NewMariaDBGroupedListingRepository(db),
-			repository.NewMariaDBMarketSnapshotRepository(db),
-			repository.NewMariaDBPricePointRepository(db),
-			repository.NewMariaDBAlertEventRepository(db),
-		),
+		cfg:        cfg,
+		db:         db,
+		dbConfig:   dbConfig,
+		migrations: migrations,
+		repos:      repos,
+		runtime:    newRuntime(repos),
 	}, nil
 }
 
 func (a *App) Run() error {
-	// Runtime/TUI/worker wiring is intentionally deferred to later milestones.
+	// Runtime execution remains explicit and bounded via RunRuntimeOnce.
 	_ = a.cfg
 	defer a.db.Close()
 	_ = a.dbConfig
 	_ = a.migrations
-	_ = a.trackedKeywords
-	_ = a.scanJobs
-	_ = a.rawListings
-	_ = a.groupedListings
-	_ = a.snapshots
-	_ = a.pricePoints
-	_ = a.alertEvents
+	_ = a.repos
 	_ = a.runtime
 	return nil
 }

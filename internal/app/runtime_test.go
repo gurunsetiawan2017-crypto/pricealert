@@ -75,6 +75,22 @@ func TestRuntimeRunOnceDelegatesToScheduler(t *testing.T) {
 	}
 }
 
+func TestNewRuntimeUsesInjectedKeywordRepository(t *testing.T) {
+	repo := &fakeTrackedKeywordRepo{}
+	runtime := newRuntime(appRepositories{trackedKeywords: repo})
+
+	result, err := runtime.RunOnce(context.Background())
+	if err != nil {
+		t.Fatalf("RunOnce() error = %v", err)
+	}
+	if repo.listActiveCalls != 1 {
+		t.Fatalf("ListActive calls = %d, want %d", repo.listActiveCalls, 1)
+	}
+	if len(result.Started) != 0 || len(result.Skipped) != 0 {
+		t.Fatalf("unexpected result: %#v", result)
+	}
+}
+
 type fakeTrackedKeywordRepo struct {
 	active          []domain.TrackedKeyword
 	listActiveCalls int
