@@ -173,4 +173,60 @@ func (r *MariaDBTrackedKeywordRepository) ListActive(ctx context.Context) ([]dom
 	return keywords, nil
 }
 
+func (r *MariaDBTrackedKeywordRepository) ListVisible(ctx context.Context) ([]domain.TrackedKeyword, error) {
+	const query = `
+		SELECT id, keyword, basic_filter, threshold_price, interval_minutes,
+			telegram_enabled, status, created_at, updated_at
+		FROM tracked_keywords
+		WHERE status IN (?, ?)
+		ORDER BY updated_at DESC, id DESC
+	`
+
+	rows, err := r.db.QueryContext(
+		ctx,
+		query,
+		string(domain.TrackedKeywordStatusActive),
+		string(domain.TrackedKeywordStatusPaused),
+	)
+	if err != nil {
+		return nil, fmt.Errorf("list visible tracked keywords: %w", err)
+	}
+	defer rows.Close()
+
+	var keywords []domain.TrackedKeyword
+	for rows.Next() {
+		var (
+			keyword        domain.TrackedKeyword
+			basicFilter    sql.NullString
+			thresholdPrice sql.NullInt64
+			status         string
+		)
+
+		if err := rows.Scan(
+			&keyword.ID,
+			&keyword.Keyword,
+			&basicFilter,
+			&thresholdPrice,
+			&keyword.IntervalMinutes,
+			&keyword.TelegramEnabled,
+			&status,
+			&keyword.CreatedAt,
+			&keyword.UpdatedAt,
+		); err != nil {
+			return nil, fmt.Errorf("scan visible tracked keyword: %w", err)
+		}
+
+		keyword.BasicFilter = stringPointer(basicFilter)
+		keyword.ThresholdPrice = int64Pointer(thresholdPrice)
+		keyword.Status = domain.TrackedKeywordStatus(status)
+		keywords = append(keywords, keyword)
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate visible tracked keywords: %w", err)
+	}
+
+	return keywords, nil
+}
+
 var _ TrackedKeywordRepository = (*MariaDBTrackedKeywordRepository)(nil)

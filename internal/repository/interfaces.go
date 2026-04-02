@@ -11,6 +11,7 @@ type TrackedKeywordRepository interface {
 	Update(context.Context, domain.TrackedKeyword) error
 	GetByID(context.Context, string) (*domain.TrackedKeyword, error)
 	ListActive(context.Context) ([]domain.TrackedKeyword, error)
+	ListVisible(context.Context) ([]domain.TrackedKeyword, error)
 }
 
 type ScanJobRepository interface {

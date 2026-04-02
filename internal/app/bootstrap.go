@@ -7,6 +7,7 @@ import (
 	"github.com/pricealert/pricealert/internal/config"
 	infraDB "github.com/pricealert/pricealert/internal/infra/db"
 	rtscheduler "github.com/pricealert/pricealert/internal/runtime/scheduler"
+	"github.com/pricealert/pricealert/internal/service/query"
 )
 
 // App wires the current local runtime foundation and shared infrastructure.
@@ -17,6 +18,7 @@ type App struct {
 	migrations []infraDB.Migration
 
 	repos   appRepositories
+	queries *query.Service
 	runtime *Runtime
 }
 
@@ -44,19 +46,16 @@ func New(cfg config.Config) (*App, error) {
 		dbConfig:   dbConfig,
 		migrations: migrations,
 		repos:      repos,
-		runtime:    newRuntime(repos),
+		queries:    newQueryService(repos),
+		runtime:    newRuntime(cfg, repos),
 	}, nil
 }
 
 func (a *App) Run() error {
-	// Runtime execution remains explicit and bounded via RunRuntimeOnce.
-	_ = a.cfg
 	defer a.db.Close()
-	_ = a.dbConfig
-	_ = a.migrations
-	_ = a.repos
-	_ = a.runtime
-	return nil
+
+	_, err := newTUIProgram(a.queries).Run()
+	return err
 }
 
 func (a *App) RunRuntimeOnce(ctx context.Context) (rtscheduler.RunResult, error) {

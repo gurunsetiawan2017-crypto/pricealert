@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/pricealert/pricealert/internal/config"
 	"github.com/pricealert/pricealert/internal/domain"
 	rtscheduler "github.com/pricealert/pricealert/internal/runtime/scheduler"
 	rtstate "github.com/pricealert/pricealert/internal/runtime/state"
@@ -77,7 +78,7 @@ func TestRuntimeRunOnceDelegatesToScheduler(t *testing.T) {
 
 func TestNewRuntimeUsesInjectedKeywordRepository(t *testing.T) {
 	repo := &fakeTrackedKeywordRepo{}
-	runtime := newRuntime(appRepositories{trackedKeywords: repo})
+	runtime := newRuntime(minimalConfig(), appRepositories{trackedKeywords: repo})
 
 	result, err := runtime.RunOnce(context.Background())
 	if err != nil {
@@ -103,6 +104,9 @@ func (f *fakeTrackedKeywordRepo) GetByID(context.Context, string) (*domain.Track
 }
 func (f *fakeTrackedKeywordRepo) ListActive(context.Context) ([]domain.TrackedKeyword, error) {
 	f.listActiveCalls++
+	return f.active, nil
+}
+func (f *fakeTrackedKeywordRepo) ListVisible(context.Context) ([]domain.TrackedKeyword, error) {
 	return f.active, nil
 }
 
@@ -136,4 +140,14 @@ type fakeWorkerExecutor struct{}
 
 func (fakeWorkerExecutor) Execute(context.Context, domain.TrackedKeyword) error {
 	return nil
+}
+
+func minimalConfig() config.Config {
+	return config.Config{
+		Scraper: config.ScraperConfig{
+			TokopediaSearchEndpoint: "https://example.com/graphql",
+			TimeoutSeconds:          5,
+			RowsPerScan:             10,
+		},
+	}
 }

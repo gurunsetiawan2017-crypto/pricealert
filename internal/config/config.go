@@ -7,13 +7,16 @@ import (
 )
 
 const (
-	defaultAppName       = "pricealert"
-	defaultRuntimeTZ     = "UTC"
-	defaultLogLevel      = "info"
-	defaultMinInterval   = 5
-	defaultMaxConcurrent = 1
-	defaultDBDriver      = "mysql"
-	defaultMigrationsDir = "migrations"
+	defaultAppName                 = "pricealert"
+	defaultRuntimeTZ               = "UTC"
+	defaultLogLevel                = "info"
+	defaultMinInterval             = 5
+	defaultMaxConcurrent           = 1
+	defaultDBDriver                = "mysql"
+	defaultMigrationsDir           = "migrations"
+	defaultScraperRows             = 10
+	defaultScraperTimeoutSeconds   = 20
+	defaultTokopediaSearchEndpoint = "https://gql.tokopedia.com/graphql/SearchProductV5Query"
 )
 
 // Config holds runtime configuration for the single-process v1 application.
@@ -22,6 +25,7 @@ type Config struct {
 	Runtime RuntimeConfig
 	DB      DBConfig
 	Paths   PathsConfig
+	Scraper ScraperConfig
 }
 
 type RuntimeConfig struct {
@@ -45,6 +49,12 @@ type PathsConfig struct {
 	MigrationsDir string
 }
 
+type ScraperConfig struct {
+	TokopediaSearchEndpoint string
+	TimeoutSeconds          int
+	RowsPerScan             int
+}
+
 // Load reads configuration from environment variables and applies safe defaults
 // for milestone-A scaffolding.
 func Load() (Config, error) {
@@ -59,6 +69,16 @@ func Load() (Config, error) {
 	}
 
 	dbPort, err := getEnvInt("PRICEALERT_DB_PORT", 3306)
+	if err != nil {
+		return Config{}, err
+	}
+
+	scraperTimeoutSeconds, err := getEnvInt("PRICEALERT_SCRAPER_TIMEOUT_SECONDS", defaultScraperTimeoutSeconds)
+	if err != nil {
+		return Config{}, err
+	}
+
+	scraperRows, err := getEnvInt("PRICEALERT_SCRAPER_ROWS_PER_SCAN", defaultScraperRows)
 	if err != nil {
 		return Config{}, err
 	}
@@ -82,6 +102,11 @@ func Load() (Config, error) {
 		},
 		Paths: PathsConfig{
 			MigrationsDir: getEnv("PRICEALERT_MIGRATIONS_DIR", defaultMigrationsDir),
+		},
+		Scraper: ScraperConfig{
+			TokopediaSearchEndpoint: getEnv("PRICEALERT_TOKOPEDIA_SEARCH_ENDPOINT", defaultTokopediaSearchEndpoint),
+			TimeoutSeconds:          scraperTimeoutSeconds,
+			RowsPerScan:             scraperRows,
 		},
 	}
 
@@ -111,6 +136,18 @@ func (c Config) Validate() error {
 
 	if c.Paths.MigrationsDir == "" {
 		return fmt.Errorf("migrations dir is required")
+	}
+
+	if c.Scraper.TokopediaSearchEndpoint == "" {
+		return fmt.Errorf("tokopedia search endpoint is required")
+	}
+
+	if c.Scraper.TimeoutSeconds <= 0 {
+		return fmt.Errorf("scraper timeout seconds must be > 0")
+	}
+
+	if c.Scraper.RowsPerScan <= 0 {
+		return fmt.Errorf("scraper rows per scan must be > 0")
 	}
 
 	return nil

@@ -3,11 +3,12 @@ package app
 import (
 	"context"
 	"database/sql"
-	"errors"
 	"time"
 
+	"github.com/pricealert/pricealert/internal/config"
 	"github.com/pricealert/pricealert/internal/domain"
 	"github.com/pricealert/pricealert/internal/infra/idgen"
+	infScraper "github.com/pricealert/pricealert/internal/infra/scraper"
 	"github.com/pricealert/pricealert/internal/repository"
 	rtscheduler "github.com/pricealert/pricealert/internal/runtime/scheduler"
 	rtstate "github.com/pricealert/pricealert/internal/runtime/state"
@@ -76,16 +77,10 @@ func (systemClock) Now() time.Time {
 	return time.Now().UTC()
 }
 
-type unsupportedScraper struct{}
-
-func (unsupportedScraper) FetchListings(context.Context, domain.TrackedKeyword) ([]domain.RawListing, error) {
-	return nil, errors.New("tokopedia scraper not implemented yet")
-}
-
-func newRuntime(repos appRepositories) *Runtime {
+func newRuntime(cfg config.Config, repos appRepositories) *Runtime {
 	clock := systemClock{}
 	scanService := scan.NewService(
-		unsupportedScraper{},
+		infScraper.NewTokopedia(cfg.Scraper),
 		idgen.NewULIDGenerator(),
 		clock,
 		repos.scanJobs,
