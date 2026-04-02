@@ -1,0 +1,36 @@
+# Go build and test artifacts
+bin/
+dist/
+build/
+coverage.out
+coverage.txt
+*.coverprofile
+*.test
+
+# Local environment and secrets
+.env
+.env.local
+.env.*.local
+
+# MariaDB and local data dumps
+*.sql.tmp
+*.sql.gz
+*.dump
+*.bak
+
+# Logs and runtime artifacts
+*.log
+logs/
+tmp/
+
+# IDE and editor files
+.idea/
+.vscode/
+*.iml
+*.swp
+*.swo
+*~
+
+# OS junk
+.DS_Store
+Thumbs.db
