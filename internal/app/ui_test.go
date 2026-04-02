@@ -103,11 +103,15 @@ func TestKeywordActionAdapterDelegates(t *testing.T) {
 
 func TestRuntimeStatusAdapterMapsSummary(t *testing.T) {
 	now := time.Date(2026, 4, 2, 10, 40, 0, 0, time.UTC)
+	latestFailure := "tokopedia search request failed"
 	adapter := newRuntimeStatusAdapter(fakeRuntimeStatusSource{
 		status: RuntimeStatus{
 			AcceptingNewWork:      true,
 			RunningCount:          1,
 			MaxConcurrent:         2,
+			FailedKeywords:        1,
+			LatestFailureMessage:  &latestFailure,
+			LastFailureAt:         &now,
 			ReconciledRunningJobs: 3,
 			LastReconciledAt:      &now,
 			PrunedRawListings:     9,
@@ -127,11 +131,38 @@ func TestRuntimeStatusAdapterMapsSummary(t *testing.T) {
 	if summary.RunningCount != 1 || summary.MaxConcurrent != 2 {
 		t.Fatalf("summary = %#v", summary)
 	}
+	if summary.FailedKeywords != 1 || summary.LatestFailureMessage == nil || *summary.LatestFailureMessage != latestFailure {
+		t.Fatalf("summary = %#v", summary)
+	}
 	if summary.PrunedRawListings != 9 {
 		t.Fatalf("pruned raw listings = %d", summary.PrunedRawListings)
 	}
 	if summary.PrunedAlertEvents != 5 {
 		t.Fatalf("summary = %#v", summary)
+	}
+}
+
+func TestRuntimeStatusAdapterMapsKeywordHealth(t *testing.T) {
+	now := time.Date(2026, 4, 2, 10, 40, 0, 0, time.UTC)
+	lastError := "tokopedia search request failed"
+	adapter := newRuntimeStatusAdapter(fakeRuntimeStatusSource{
+		keywordStatus: RuntimeKeywordStatus{
+			Running:          true,
+			LastSuccessAt:    &now,
+			LastErrorMessage: &lastError,
+			LastErrorAt:      &now,
+		},
+	})
+
+	health, err := adapter.KeywordHealth(context.Background(), "kw_1")
+	if err != nil {
+		t.Fatalf("KeywordHealth() error = %v", err)
+	}
+	if health == nil || !health.Running {
+		t.Fatalf("health = %#v", health)
+	}
+	if health.LastErrorMessage == nil || *health.LastErrorMessage != lastError {
+		t.Fatalf("health = %#v", health)
 	}
 }
 
@@ -182,11 +213,16 @@ type fakeKeywordActionService struct {
 }
 
 type fakeRuntimeStatusSource struct {
-	status RuntimeStatus
+	status        RuntimeStatus
+	keywordStatus RuntimeKeywordStatus
 }
 
 func (f fakeRuntimeStatusSource) RuntimeStatus() RuntimeStatus {
 	return f.status
+}
+
+func (f fakeRuntimeStatusSource) KeywordRuntimeStatus(string) RuntimeKeywordStatus {
+	return f.keywordStatus
 }
 
 func (f *fakeKeywordActionService) AddKeyword(_ context.Context, keyword string) error {

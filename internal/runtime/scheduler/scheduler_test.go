@@ -60,6 +60,10 @@ func TestPausedKeywordIsSkipped(t *testing.T) {
 	if executor.callCount() != 0 {
 		t.Fatalf("executor calls = %d, want 0", executor.callCount())
 	}
+	summary := stateStore.Summary()
+	if summary.KeywordsTracked != 1 {
+		t.Fatalf("keywords tracked = %d, want 1", summary.KeywordsTracked)
+	}
 }
 
 func TestOverlappingScanForSameKeywordIsBlocked(t *testing.T) {

@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"sync"
 	"time"
 
 	"github.com/pricealert/pricealert/internal/config"
@@ -79,12 +80,22 @@ type RuntimeStatus struct {
 	MaxConcurrent         int
 	RunningCount          int
 	TrackedKeywords       int
+	FailedKeywords        int
+	LatestFailureMessage  *string
+	LastFailureAt         *time.Time
 	ReconciledRunningJobs int
 	LastReconciledAt      *time.Time
 	PrunedRawListings     int
 	LastPrunedAt          *time.Time
 	PrunedAlertEvents     int
 	LastAlertPrunedAt     *time.Time
+}
+
+type RuntimeKeywordStatus struct {
+	Running          bool
+	LastSuccessAt    *time.Time
+	LastErrorMessage *string
+	LastErrorAt      *time.Time
 }
 
 func (r *Runtime) Status() RuntimeStatus {
@@ -96,6 +107,9 @@ func (r *Runtime) Status() RuntimeStatus {
 		MaxConcurrent:         workerStatus.MaxConcurrent,
 		RunningCount:          stateSummary.RunningCount,
 		TrackedKeywords:       stateSummary.KeywordsTracked,
+		FailedKeywords:        stateSummary.FailedKeywords,
+		LatestFailureMessage:  stateSummary.LatestFailure,
+		LastFailureAt:         stateSummary.LatestFailureAt,
 		ReconciledRunningJobs: r.startup.ReconciledCount,
 		LastReconciledAt:      r.startup.ReconciledAt,
 		PrunedRawListings:     r.pruning.PrunedCount,
@@ -109,9 +123,112 @@ func (r *Runtime) RuntimeStatus() RuntimeStatus {
 	return r.Status()
 }
 
+func (r *Runtime) KeywordRuntimeStatus(keywordID string) RuntimeKeywordStatus {
+	state := r.state.Snapshot(keywordID)
+	return RuntimeKeywordStatus{
+		Running:          state.Running,
+		LastSuccessAt:    copyTime(state.LastSuccessAt),
+		LastErrorMessage: copyString(state.LastError),
+		LastErrorAt:      copyTime(firstNonNilTimeValue(state.LastFinishedAt, state.LastAttemptAt)),
+	}
+}
+
 func (r *Runtime) Close(ctx context.Context) error {
 	r.worker.StopAcceptingNewWork()
 	return r.worker.Wait(ctx)
+}
+
+type runtimeStepRunner interface {
+	RunOnce(context.Context) (rtscheduler.RunResult, error)
+}
+
+type ticker interface {
+	C() <-chan time.Time
+	Stop()
+}
+
+type timeTicker struct {
+	ticker *time.Ticker
+}
+
+func newTimeTicker(interval time.Duration) ticker {
+	return &timeTicker{ticker: time.NewTicker(interval)}
+}
+
+func (t *timeTicker) C() <-chan time.Time {
+	return t.ticker.C
+}
+
+func (t *timeTicker) Stop() {
+	t.ticker.Stop()
+}
+
+type runtimeLoop struct {
+	cancel context.CancelFunc
+	done   chan struct{}
+	once   sync.Once
+}
+
+func startRuntimeLoop(parent context.Context, runner runtimeStepRunner, interval time.Duration, newTicker func(time.Duration) ticker) *runtimeLoop {
+	if interval <= 0 {
+		interval = 15 * time.Second
+	}
+	if newTicker == nil {
+		newTicker = newTimeTicker
+	}
+
+	ctx, cancel := context.WithCancel(parent)
+	loop := &runtimeLoop{
+		cancel: cancel,
+		done:   make(chan struct{}),
+	}
+
+	go func() {
+		defer close(loop.done)
+
+		ticker := newTicker(interval)
+		defer ticker.Stop()
+
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C():
+				_, _ = runner.RunOnce(context.Background())
+			}
+		}
+	}()
+
+	return loop
+}
+
+func (l *runtimeLoop) Stop(ctx context.Context) error {
+	if l == nil {
+		return nil
+	}
+
+	l.once.Do(func() {
+		l.cancel()
+	})
+
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-l.done:
+		return nil
+	}
+}
+
+func autonomousRuntimeLoopInterval(cfg config.Config) time.Duration {
+	base := time.Duration(cfg.Runtime.MinScanIntervalMins) * time.Minute
+	interval := base / 6
+	if interval < 5*time.Second {
+		return 5 * time.Second
+	}
+	if interval > 30*time.Second {
+		return 30 * time.Second
+	}
+	return interval
 }
 
 type trackedKeywordSourceAdapter struct {
@@ -119,7 +236,7 @@ type trackedKeywordSourceAdapter struct {
 }
 
 func (a trackedKeywordSourceAdapter) ListKeywords(ctx context.Context) ([]domain.TrackedKeyword, error) {
-	return a.repo.ListActive(ctx)
+	return a.repo.ListVisible(ctx)
 }
 
 type scanRunner interface {
@@ -162,6 +279,31 @@ type RawListingPruneResult struct {
 type AlertEventPruneResult struct {
 	PrunedCount int
 	PrunedAt    *time.Time
+}
+
+func copyTime(value *time.Time) *time.Time {
+	if value == nil {
+		return nil
+	}
+	v := *value
+	return &v
+}
+
+func copyString(value *string) *string {
+	if value == nil {
+		return nil
+	}
+	v := *value
+	return &v
+}
+
+func firstNonNilTimeValue(values ...*time.Time) *time.Time {
+	for _, value := range values {
+		if value != nil {
+			return value
+		}
+	}
+	return nil
 }
 
 func reconcileAbandonedRunningScanJobs(ctx context.Context, scanJobs repository.ScanJobRepository, clock Clock) (StartupReconciliationResult, error) {

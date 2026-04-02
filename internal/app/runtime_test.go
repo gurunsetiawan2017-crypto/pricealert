@@ -15,10 +15,11 @@ import (
 	"github.com/pricealert/pricealert/internal/service/scan"
 )
 
-func TestTrackedKeywordSourceAdapterUsesListActive(t *testing.T) {
+func TestTrackedKeywordSourceAdapterUsesListVisible(t *testing.T) {
 	repo := &fakeTrackedKeywordRepo{
-		active: []domain.TrackedKeyword{
+		visible: []domain.TrackedKeyword{
 			{ID: "kw_1", Status: domain.TrackedKeywordStatusActive},
+			{ID: "kw_2", Status: domain.TrackedKeywordStatusPaused},
 		},
 	}
 
@@ -27,11 +28,11 @@ func TestTrackedKeywordSourceAdapterUsesListActive(t *testing.T) {
 		t.Fatalf("ListKeywords() error = %v", err)
 	}
 
-	if repo.listActiveCalls != 1 {
-		t.Fatalf("ListActive calls = %d, want %d", repo.listActiveCalls, 1)
+	if repo.listVisibleCalls != 1 {
+		t.Fatalf("ListVisible calls = %d, want %d", repo.listVisibleCalls, 1)
 	}
-	if len(got) != 1 || got[0].ID != "kw_1" {
-		t.Fatalf("keywords = %#v, want kw_1", got)
+	if len(got) != 2 || got[0].ID != "kw_1" || got[1].ID != "kw_2" {
+		t.Fatalf("keywords = %#v", got)
 	}
 }
 
@@ -81,18 +82,45 @@ func TestRuntimeRunOnceDelegatesToScheduler(t *testing.T) {
 }
 
 func TestNewRuntimeUsesInjectedKeywordRepository(t *testing.T) {
-	repo := &fakeTrackedKeywordRepo{}
+	repo := &fakeTrackedKeywordRepo{
+		visible: []domain.TrackedKeyword{
+			{ID: "kw_1", Status: domain.TrackedKeywordStatusActive, IntervalMinutes: 5},
+			{ID: "kw_2", Status: domain.TrackedKeywordStatusPaused, IntervalMinutes: 5},
+		},
+	}
 	runtime := newRuntime(minimalConfig(), appRepositories{trackedKeywords: repo})
 
 	result, err := runtime.RunOnce(context.Background())
 	if err != nil {
 		t.Fatalf("RunOnce() error = %v", err)
 	}
-	if repo.listActiveCalls != 1 {
-		t.Fatalf("ListActive calls = %d, want %d", repo.listActiveCalls, 1)
+	if repo.listVisibleCalls != 1 {
+		t.Fatalf("ListVisible calls = %d, want %d", repo.listVisibleCalls, 1)
 	}
-	if len(result.Started) != 0 || len(result.Skipped) != 0 {
-		t.Fatalf("unexpected result: %#v", result)
+	if len(result.Started) != 1 || result.Started[0] != "kw_1" {
+		t.Fatalf("started = %#v", result.Started)
+	}
+	if len(result.Skipped) != 1 || result.Skipped[0] != "kw_2" {
+		t.Fatalf("skipped = %#v", result.Skipped)
+	}
+}
+
+func TestRuntimeStatusCountsPausedKeywordsLoadedIntoState(t *testing.T) {
+	repo := &fakeTrackedKeywordRepo{
+		visible: []domain.TrackedKeyword{
+			{ID: "kw_1", Status: domain.TrackedKeywordStatusActive, IntervalMinutes: 5},
+			{ID: "kw_2", Status: domain.TrackedKeywordStatusPaused, IntervalMinutes: 5},
+		},
+	}
+	runtime := newRuntime(minimalConfig(), appRepositories{trackedKeywords: repo})
+
+	if _, err := runtime.RunOnce(context.Background()); err != nil {
+		t.Fatalf("RunOnce() error = %v", err)
+	}
+
+	status := runtime.Status()
+	if status.TrackedKeywords != 2 {
+		t.Fatalf("tracked keywords = %d, want 2", status.TrackedKeywords)
 	}
 }
 
@@ -105,6 +133,28 @@ func TestRuntimeStatusReflectsWorkerConfig(t *testing.T) {
 	}
 	if status.MaxConcurrent != 2 {
 		t.Fatalf("max concurrent = %d, want 2", status.MaxConcurrent)
+	}
+}
+
+func TestRuntimeStatusIncludesLatestFailureSummary(t *testing.T) {
+	clock := stubClock{current: time.Date(2026, 4, 2, 10, 0, 0, 0, time.UTC)}
+	stateStore := rtstate.NewStore()
+	stateStore.MarkRunning("kw_1", clock.current)
+	finishedAt := clock.current.Add(30 * time.Second)
+	stateStore.MarkFinished("kw_1", finishedAt, 5, errors.New("tokopedia search request failed"))
+
+	worker := rtworker.New(stateStore, fakeWorkerExecutor{}, clock, 1)
+	runtime := &Runtime{worker: worker, state: stateStore}
+
+	status := runtime.Status()
+	if status.FailedKeywords != 1 {
+		t.Fatalf("failed keywords = %d, want 1", status.FailedKeywords)
+	}
+	if status.LatestFailureMessage == nil || *status.LatestFailureMessage != "tokopedia search request failed" {
+		t.Fatalf("latest failure message = %v", status.LatestFailureMessage)
+	}
+	if status.LastFailureAt == nil || !status.LastFailureAt.Equal(finishedAt) {
+		t.Fatalf("last failure at = %#v, want %v", status.LastFailureAt, finishedAt)
 	}
 }
 
@@ -378,10 +428,70 @@ func TestRuntimeStatusIncludesAlertPruning(t *testing.T) {
 	}
 }
 
+func TestStartRuntimeLoopTriggersBoundedRunOnTicks(t *testing.T) {
+	runner := &fakeRuntimeLoopRunner{}
+	fakeTick := &fakeTicker{ch: make(chan time.Time, 4)}
+	loop := startRuntimeLoop(context.Background(), runner, 10*time.Second, func(time.Duration) ticker {
+		return fakeTick
+	})
+
+	fakeTick.ch <- time.Now()
+	fakeTick.ch <- time.Now()
+
+	waitForCondition(t, time.Second, func() bool {
+		runner.mu.Lock()
+		defer runner.mu.Unlock()
+		return runner.calls == 2
+	})
+
+	if err := loop.Stop(context.Background()); err != nil {
+		t.Fatalf("Stop() error = %v", err)
+	}
+	if !fakeTick.stopped {
+		t.Fatalf("expected ticker to be stopped")
+	}
+}
+
+func TestRuntimeLoopStopPreventsFurtherTicks(t *testing.T) {
+	runner := &fakeRuntimeLoopRunner{}
+	fakeTick := &fakeTicker{ch: make(chan time.Time, 4)}
+	loop := startRuntimeLoop(context.Background(), runner, 10*time.Second, func(time.Duration) ticker {
+		return fakeTick
+	})
+
+	if err := loop.Stop(context.Background()); err != nil {
+		t.Fatalf("Stop() error = %v", err)
+	}
+
+	fakeTick.ch <- time.Now()
+	time.Sleep(20 * time.Millisecond)
+
+	runner.mu.Lock()
+	defer runner.mu.Unlock()
+	if runner.calls != 0 {
+		t.Fatalf("calls = %d, want 0", runner.calls)
+	}
+}
+
+func TestAutonomousRuntimeLoopIntervalClampsRange(t *testing.T) {
+	cfg := minimalConfig()
+	cfg.Runtime.MinScanIntervalMins = 1
+	if got := autonomousRuntimeLoopInterval(cfg); got != 10*time.Second {
+		t.Fatalf("interval = %v, want 10s", got)
+	}
+
+	cfg.Runtime.MinScanIntervalMins = 10
+	if got := autonomousRuntimeLoopInterval(cfg); got != 30*time.Second {
+		t.Fatalf("interval = %v, want 30s", got)
+	}
+}
+
 type fakeTrackedKeywordRepo struct {
-	active          []domain.TrackedKeyword
-	byID            map[string]domain.TrackedKeyword
-	listActiveCalls int
+	active           []domain.TrackedKeyword
+	visible          []domain.TrackedKeyword
+	byID             map[string]domain.TrackedKeyword
+	listActiveCalls  int
+	listVisibleCalls int
 }
 
 func (f *fakeTrackedKeywordRepo) Create(context.Context, domain.TrackedKeyword) error { return nil }
@@ -398,7 +508,8 @@ func (f *fakeTrackedKeywordRepo) ListActive(context.Context) ([]domain.TrackedKe
 	return f.active, nil
 }
 func (f *fakeTrackedKeywordRepo) ListVisible(context.Context) ([]domain.TrackedKeyword, error) {
-	return f.active, nil
+	f.listVisibleCalls++
+	return f.visible, nil
 }
 
 type fakeScanRunner struct {
@@ -431,6 +542,31 @@ type fakeWorkerExecutor struct{}
 
 func (fakeWorkerExecutor) Execute(context.Context, domain.TrackedKeyword) error {
 	return nil
+}
+
+type fakeRuntimeLoopRunner struct {
+	mu    sync.Mutex
+	calls int
+}
+
+func (f *fakeRuntimeLoopRunner) RunOnce(context.Context) (rtscheduler.RunResult, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.calls++
+	return rtscheduler.RunResult{}, nil
+}
+
+type fakeTicker struct {
+	ch      chan time.Time
+	stopped bool
+}
+
+func (f *fakeTicker) C() <-chan time.Time {
+	return f.ch
+}
+
+func (f *fakeTicker) Stop() {
+	f.stopped = true
 }
 
 type recordingWorkerExecutor struct {
@@ -511,6 +647,18 @@ func minimalConfig() config.Config {
 			RowsPerScan:             10,
 		},
 	}
+}
+
+func waitForCondition(t *testing.T, timeout time.Duration, fn func() bool) {
+	t.Helper()
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		if fn() {
+			return
+		}
+		time.Sleep(time.Millisecond)
+	}
+	t.Fatalf("condition not met before timeout")
 }
 
 type fakeStartupScanJobRepo struct {

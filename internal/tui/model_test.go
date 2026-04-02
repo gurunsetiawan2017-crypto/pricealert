@@ -5,6 +5,7 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 
@@ -233,12 +234,25 @@ func TestPauseSelectedKeywordFromDashboard(t *testing.T) {
 }
 
 func TestDashboardViewShowsRuntimeStatusSummary(t *testing.T) {
+	latestFailure := "tokopedia search request failed"
 	model := NewModel(&fakeQueryService{}, fakeRuntimeTrigger{}, &fakeBrowserOpener{}, &fakeKeywordActions{})
 	model.dashboard = &dto.DashboardState{
+		TrackedKeywords: []dto.TrackedKeywordSummary{
+			{
+				ID:      "kw_1",
+				Keyword: "Raspberry Pi 3",
+				Status:  "active",
+				RuntimeHealth: &dto.RuntimeKeywordHealth{
+					Running: true,
+				},
+			},
+		},
 		RuntimeStatus: &dto.RuntimeStatusSummary{
 			AcceptingNewWork:      true,
 			RunningCount:          1,
 			MaxConcurrent:         2,
+			FailedKeywords:        1,
+			LatestFailureMessage:  &latestFailure,
 			ReconciledRunningJobs: 3,
 			PrunedRawListings:     9,
 			PrunedAlertEvents:     5,
@@ -255,6 +269,15 @@ func TestDashboardViewShowsRuntimeStatusSummary(t *testing.T) {
 	if !strings.Contains(view, "Running: 1 / 2") {
 		t.Fatalf("view = %q", view)
 	}
+	if !strings.Contains(view, "Keywords With Last Error: 1") {
+		t.Fatalf("view = %q", view)
+	}
+	if !strings.Contains(view, "Latest Failure: tokopedia search") {
+		t.Fatalf("view = %q", view)
+	}
+	if !strings.Contains(view, "runtime running now") {
+		t.Fatalf("view = %q", view)
+	}
 	if !strings.Contains(view, "Startup Reconciled: 3 running job(s)") {
 		t.Fatalf("view = %q", view)
 	}
@@ -262,6 +285,40 @@ func TestDashboardViewShowsRuntimeStatusSummary(t *testing.T) {
 		t.Fatalf("view = %q", view)
 	}
 	if !strings.Contains(view, "Startup Pruned Alert Events: 5") {
+		t.Fatalf("view = %q", view)
+	}
+}
+
+func TestDetailViewShowsKeywordRuntimeHealth(t *testing.T) {
+	now := time.Date(2026, 4, 2, 10, 40, 0, 0, time.UTC)
+	lastError := "tokopedia search request failed"
+	model := NewModel(&fakeQueryService{}, fakeRuntimeTrigger{}, &fakeBrowserOpener{}, &fakeKeywordActions{})
+	model.screen = screenDetail
+	model.detail = &dto.KeywordDetail{
+		Keyword: dto.TrackedKeyword{
+			ID:      "kw_1",
+			Keyword: "Raspberry Pi 3",
+			Status:  "active",
+			RuntimeHealth: &dto.RuntimeKeywordHealth{
+				Running:          true,
+				LastSuccessAt:    &now,
+				LastErrorMessage: &lastError,
+				LastErrorAt:      &now,
+			},
+		},
+	}
+
+	view := model.View()
+	if !strings.Contains(view, "Runtime Running: yes") {
+		t.Fatalf("view = %q", view)
+	}
+	if !strings.Contains(view, "Last Success: 2026-04-02 17:40") {
+		t.Fatalf("view = %q", view)
+	}
+	if !strings.Contains(view, "Last Error: tokopedia search request") {
+		t.Fatalf("view = %q", view)
+	}
+	if !strings.Contains(view, "Last Error At: 2026-04-02 17:40") {
 		t.Fatalf("view = %q", view)
 	}
 }

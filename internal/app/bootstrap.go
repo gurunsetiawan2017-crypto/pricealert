@@ -78,7 +78,13 @@ func New(cfg config.Config) (*App, error) {
 }
 
 func (a *App) Run() error {
+	runtimeLoop := startRuntimeLoop(context.Background(), a.runtime, autonomousRuntimeLoopInterval(a.cfg), nil)
+
 	defer func() {
+		loopCtx, loopCancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer loopCancel()
+		_ = runtimeLoop.Stop(loopCtx)
+
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
 		_ = a.runtime.Close(shutdownCtx)

@@ -861,6 +861,9 @@ func renderDashboard(state *dto.DashboardState, width int, selectedIndex int, lo
 			}
 			keywordLines = append(keywordLines, fmt.Sprintf("%s%s", prefix, selectedKeywordText(index == selectedIndex, shorten(keyword.Keyword, layout.leftContentWidth-6))))
 			keywordLines = append(keywordLines, fmt.Sprintf("  status %s%s", keyword.Status, alertMarker))
+			for _, line := range formatKeywordRuntimeHealthCompact(keyword.RuntimeHealth, layout.leftContentWidth-4) {
+				keywordLines = append(keywordLines, "  "+line)
+			}
 		}
 	}
 
@@ -936,6 +939,17 @@ func formatRuntimeStatus(status *dto.RuntimeStatusSummary) []string {
 		fmt.Sprintf("Accepting New Work: %s", accepting),
 		fmt.Sprintf("Running: %d / %d", status.RunningCount, status.MaxConcurrent),
 	}
+	if status.FailedKeywords > 0 {
+		lines = append(lines, fmt.Sprintf("Keywords With Last Error: %d", status.FailedKeywords))
+	}
+	if status.LatestFailureMessage != nil {
+		message := shorten(*status.LatestFailureMessage, 48)
+		if status.LastFailureAt != nil {
+			lines = append(lines, fmt.Sprintf("Latest Failure: %s @ %s", message, status.LastFailureAt.Format("15:04")))
+		} else {
+			lines = append(lines, fmt.Sprintf("Latest Failure: %s", message))
+		}
+	}
 
 	if status.ReconciledRunningJobs > 0 {
 		lines = append(lines, fmt.Sprintf("Startup Reconciled: %d running job(s)", status.ReconciledRunningJobs))
@@ -947,6 +961,49 @@ func formatRuntimeStatus(status *dto.RuntimeStatusSummary) []string {
 		lines = append(lines, fmt.Sprintf("Startup Pruned Alert Events: %d", status.PrunedAlertEvents))
 	}
 
+	return lines
+}
+
+func formatKeywordRuntimeHealthCompact(health *dto.RuntimeKeywordHealth, width int) []string {
+	if health == nil {
+		return nil
+	}
+
+	lines := make([]string, 0, 2)
+	if health.Running {
+		lines = append(lines, "runtime running now")
+	}
+	if health.LastErrorMessage != nil {
+		line := "runtime err " + shorten(*health.LastErrorMessage, max(12, width-12))
+		if health.LastErrorAt != nil {
+			line += " @ " + health.LastErrorAt.Format("15:04")
+		}
+		lines = append(lines, line)
+		return lines
+	}
+	if health.LastSuccessAt != nil {
+		lines = append(lines, "runtime ok @ "+health.LastSuccessAt.Format("15:04"))
+	}
+	return lines
+}
+
+func formatKeywordRuntimeHealthDetail(health *dto.RuntimeKeywordHealth) []string {
+	if health == nil {
+		return nil
+	}
+
+	lines := []string{
+		formatKeyValue("Runtime Running", boolYesNo(health.Running)),
+	}
+	if health.LastSuccessAt != nil {
+		lines = append(lines, formatKeyValue("Last Success", formatTimestamp(health.LastSuccessAt)))
+	}
+	if health.LastErrorMessage != nil {
+		lines = append(lines, formatKeyValue("Last Error", *health.LastErrorMessage))
+		if health.LastErrorAt != nil {
+			lines = append(lines, formatKeyValue("Last Error At", formatTimestamp(health.LastErrorAt)))
+		}
+	}
 	return lines
 }
 
@@ -967,6 +1024,7 @@ func renderDetail(detail *dto.KeywordDetail, width int, loading bool, status str
 		filterHintStyle.Render("Syntax: token token -exclude"),
 		formatKeyValue("Telegram", fmt.Sprintf("%t", detail.Keyword.TelegramEnabled)),
 	}
+	keywordLines = append(keywordLines, formatKeywordRuntimeHealthDetail(detail.Keyword.RuntimeHealth)...)
 	if editingField != editFieldNone {
 		keywordLines = append(keywordLines,
 			formatKeyValue("Editing "+editingFieldLabel(editingField), editInput),
@@ -1099,6 +1157,13 @@ func formatOptionalString(value *string) string {
 		return "-"
 	}
 	return *value
+}
+
+func boolYesNo(value bool) string {
+	if value {
+		return "yes"
+	}
+	return "no"
 }
 
 func editingFieldLabel(field editField) string {

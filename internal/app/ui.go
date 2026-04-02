@@ -41,6 +41,7 @@ func newTUIProgram(queries *query.Service, trigger runtimeTriggerAdapter, browse
 
 type runtimeStatusSource interface {
 	RuntimeStatus() RuntimeStatus
+	KeywordRuntimeStatus(string) RuntimeKeywordStatus
 }
 
 type runtimeStatusAdapter struct {
@@ -57,12 +58,25 @@ func (a runtimeStatusAdapter) Summary(context.Context) (*dto.RuntimeStatusSummar
 		AcceptingNewWork:      status.AcceptingNewWork,
 		RunningCount:          status.RunningCount,
 		MaxConcurrent:         status.MaxConcurrent,
+		FailedKeywords:        status.FailedKeywords,
+		LatestFailureMessage:  status.LatestFailureMessage,
+		LastFailureAt:         status.LastFailureAt,
 		ReconciledRunningJobs: status.ReconciledRunningJobs,
 		LastReconciledAt:      status.LastReconciledAt,
 		PrunedRawListings:     status.PrunedRawListings,
 		LastPrunedAt:          status.LastPrunedAt,
 		PrunedAlertEvents:     status.PrunedAlertEvents,
 		LastAlertPrunedAt:     status.LastAlertPrunedAt,
+	}, nil
+}
+
+func (a runtimeStatusAdapter) KeywordHealth(_ context.Context, keywordID string) (*dto.RuntimeKeywordHealth, error) {
+	status := a.source.KeywordRuntimeStatus(keywordID)
+	return &dto.RuntimeKeywordHealth{
+		Running:          status.Running,
+		LastSuccessAt:    status.LastSuccessAt,
+		LastErrorMessage: status.LastErrorMessage,
+		LastErrorAt:      status.LastErrorAt,
 	}, nil
 }
 

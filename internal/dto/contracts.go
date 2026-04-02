@@ -3,22 +3,31 @@ package dto
 import "time"
 
 type TrackedKeyword struct {
-	ID              string    `json:"id"`
-	Keyword         string    `json:"keyword"`
-	BasicFilter     *string   `json:"basic_filter"`
-	ThresholdPrice  *int64    `json:"threshold_price"`
-	IntervalMinutes int       `json:"interval_minutes"`
-	TelegramEnabled bool      `json:"telegram_enabled"`
-	Status          string    `json:"status"`
-	CreatedAt       time.Time `json:"created_at"`
-	UpdatedAt       time.Time `json:"updated_at"`
+	ID              string                `json:"id"`
+	Keyword         string                `json:"keyword"`
+	BasicFilter     *string               `json:"basic_filter"`
+	ThresholdPrice  *int64                `json:"threshold_price"`
+	IntervalMinutes int                   `json:"interval_minutes"`
+	TelegramEnabled bool                  `json:"telegram_enabled"`
+	Status          string                `json:"status"`
+	RuntimeHealth   *RuntimeKeywordHealth `json:"runtime_health"`
+	CreatedAt       time.Time             `json:"created_at"`
+	UpdatedAt       time.Time             `json:"updated_at"`
 }
 
 type TrackedKeywordSummary struct {
-	ID          string `json:"id"`
-	Keyword     string `json:"keyword"`
-	Status      string `json:"status"`
-	HasNewAlert bool   `json:"has_new_alert"`
+	ID            string                `json:"id"`
+	Keyword       string                `json:"keyword"`
+	Status        string                `json:"status"`
+	HasNewAlert   bool                  `json:"has_new_alert"`
+	RuntimeHealth *RuntimeKeywordHealth `json:"runtime_health"`
+}
+
+type RuntimeKeywordHealth struct {
+	Running          bool       `json:"running"`
+	LastSuccessAt    *time.Time `json:"last_success_at"`
+	LastErrorMessage *string    `json:"last_error_message"`
+	LastErrorAt      *time.Time `json:"last_error_at"`
 }
 
 type GroupedListing struct {
@@ -86,15 +95,18 @@ type DashboardState struct {
 }
 
 type RuntimeStatusSummary struct {
-	AcceptingNewWork       bool       `json:"accepting_new_work"`
-	RunningCount           int        `json:"running_count"`
-	MaxConcurrent          int        `json:"max_concurrent"`
-	ReconciledRunningJobs  int        `json:"reconciled_running_jobs"`
-	LastReconciledAt       *time.Time `json:"last_reconciled_at"`
-	PrunedRawListings      int        `json:"pruned_raw_listings"`
-	LastPrunedAt           *time.Time `json:"last_pruned_at"`
-	PrunedAlertEvents      int        `json:"pruned_alert_events"`
-	LastAlertPrunedAt      *time.Time `json:"last_alert_pruned_at"`
+	AcceptingNewWork      bool       `json:"accepting_new_work"`
+	RunningCount          int        `json:"running_count"`
+	MaxConcurrent         int        `json:"max_concurrent"`
+	FailedKeywords        int        `json:"failed_keywords"`
+	LatestFailureMessage  *string    `json:"latest_failure_message"`
+	LastFailureAt         *time.Time `json:"last_failure_at"`
+	ReconciledRunningJobs int        `json:"reconciled_running_jobs"`
+	LastReconciledAt      *time.Time `json:"last_reconciled_at"`
+	PrunedRawListings     int        `json:"pruned_raw_listings"`
+	LastPrunedAt          *time.Time `json:"last_pruned_at"`
+	PrunedAlertEvents     int        `json:"pruned_alert_events"`
+	LastAlertPrunedAt     *time.Time `json:"last_alert_pruned_at"`
 }
 
 type TelegramTopListing struct {
