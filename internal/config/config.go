@@ -40,17 +40,32 @@ type DBConfig struct {
 // Load reads configuration from environment variables and applies safe defaults
 // for milestone-A scaffolding.
 func Load() (Config, error) {
+	minScanInterval, err := getEnvInt("PRICEALERT_MIN_SCAN_INTERVAL_MINS", defaultMinInterval)
+	if err != nil {
+		return Config{}, err
+	}
+
+	maxConcurrentScans, err := getEnvInt("PRICEALERT_MAX_CONCURRENT_SCANS", defaultMaxConcurrent)
+	if err != nil {
+		return Config{}, err
+	}
+
+	dbPort, err := getEnvInt("PRICEALERT_DB_PORT", 3306)
+	if err != nil {
+		return Config{}, err
+	}
+
 	cfg := Config{
 		AppName: getEnv("PRICEALERT_APP_NAME", defaultAppName),
 		Runtime: RuntimeConfig{
 			Timezone:            getEnv("PRICEALERT_RUNTIME_TIMEZONE", defaultRuntimeTZ),
 			LogLevel:            getEnv("PRICEALERT_LOG_LEVEL", defaultLogLevel),
-			MinScanIntervalMins: getEnvInt("PRICEALERT_MIN_SCAN_INTERVAL_MINS", defaultMinInterval),
-			MaxConcurrentScans:  getEnvInt("PRICEALERT_MAX_CONCURRENT_SCANS", defaultMaxConcurrent),
+			MinScanIntervalMins: minScanInterval,
+			MaxConcurrentScans:  maxConcurrentScans,
 		},
 		DB: DBConfig{
 			Host:     getEnv("PRICEALERT_DB_HOST", "127.0.0.1"),
-			Port:     getEnvInt("PRICEALERT_DB_PORT", 3306),
+			Port:     dbPort,
 			User:     getEnv("PRICEALERT_DB_USER", "root"),
 			Password: getEnv("PRICEALERT_DB_PASSWORD", ""),
 			Name:     getEnv("PRICEALERT_DB_NAME", "pricealert"),
@@ -74,8 +89,8 @@ func (c Config) Validate() error {
 		return fmt.Errorf("runtime max concurrent scans must be > 0")
 	}
 
-	if c.DB.Port <= 0 {
-		return fmt.Errorf("db port must be > 0")
+	if c.DB.Port < 1 || c.DB.Port > 65535 {
+		return fmt.Errorf("db port must be between 1 and 65535")
 	}
 
 	if c.DB.Host == "" || c.DB.User == "" || c.DB.Name == "" {
@@ -93,16 +108,16 @@ func getEnv(key, fallback string) string {
 	return fallback
 }
 
-func getEnvInt(key string, fallback int) int {
+func getEnvInt(key string, fallback int) (int, error) {
 	value := os.Getenv(key)
 	if value == "" {
-		return fallback
+		return fallback, nil
 	}
 
 	parsed, err := strconv.Atoi(value)
 	if err != nil {
-		return fallback
+		return 0, fmt.Errorf("invalid integer value for %s: %q", key, value)
 	}
 
-	return parsed
+	return parsed, nil
 }
