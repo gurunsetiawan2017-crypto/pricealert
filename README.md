@@ -142,7 +142,13 @@ At the moment the app expects the schema to already exist. Apply:
 - [migrations/001_init.sql](/home/iwan/Project/pricealert/migrations/001_init.sql)
 - [migrations/002_price_points.sql](/home/iwan/Project/pricealert/migrations/002_price_points.sql)
 
-Example with MariaDB client:
+Preferred helper script:
+
+```bash
+./scripts/apply-migrations.sh
+```
+
+Equivalent manual commands:
 
 ```bash
 mariadb -h127.0.0.1 -uroot -ppassword pricealert < migrations/001_init.sql
@@ -157,6 +163,13 @@ From the repository root:
 
 ```bash
 go run ./cmd/pricealert
+```
+
+Or use the helper script:
+
+```bash
+cp .env.example .env
+./scripts/run-local.sh
 ```
 
 This starts the single-process local app:
