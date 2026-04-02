@@ -1,0 +1,427 @@
+# DealHunt Plan v1
+
+## Overview
+
+DealHunt is a keyboard-first terminal application for monitoring marketplace prices and surfacing actionable buying signals for UMKM and power users.
+
+The initial product direction is:
+
+- single-user first
+- Tokopedia-focused for the early phase
+- TUI as the main user interface
+- CLI used for setup and interaction
+- background worker for continuous monitoring
+- Telegram as the first external alert channel
+- MariaDB as the main storage
+- Go as the main implementation language
+
+The long-term direction includes a web interface, so the system should be JSON-ready from the start.
+
+---
+
+## Product Goal
+
+Help users decide **when to buy** by monitoring market prices, detecting better deals early, and turning noisy listing data into useful signals.
+
+This is not only a price tracker.  
+The intended positioning is:
+
+> a decision engine for buying at the right time
+
+---
+
+## Initial Target Users
+
+### Primary
+- UMKM owners buying inventory
+- power users who actively monitor Tokopedia prices
+
+### Early go-to-market
+- close contacts
+- WhatsApp network
+- social media audience
+
+---
+
+## Scope for POC v1
+
+### Core features
+- keyword-based market scan
+- configurable tracking interval
+- threshold-based alert
+- grouped / deduplicated results
+- market snapshot
+- top deals view
+- activity log
+- Telegram alert
+
+### Excluded from v1
+- web dashboard
+- multi-user support
+- multi-marketplace support
+- advanced prediction or machine learning
+- sophisticated fake discount intelligence
+- WhatsApp integration
+
+---
+
+## UX Direction
+
+### Interface style
+- terminal-first
+- keyboard-driven
+- inspired by tools like lazydocker / k9s
+- clean, focused, dashboard-like TUI
+
+### Main screens
+1. Main dashboard
+2. Keyword detail
+3. Add keyword modal
+4. Edit keyword modal
+5. Confirm delete modal
+
+### Main dashboard layout
+- left: tracked keywords
+- right: market snapshot + top deals
+- bottom: alerts / activity log
+
+---
+
+## Core Product Flow
+
+### 1. Add a keyword
+User adds:
+- keyword
+- threshold price
+- interval
+- Telegram enabled or not
+- optional basic filter
+
+### 2. Start monitoring
+Background worker periodically:
+- fetches listings
+- normalizes titles
+- groups similar results
+- computes snapshot
+- evaluates signal
+- stores results
+- emits events
+
+### 3. Surface insights
+TUI shows:
+- min / avg / max
+- grouped result count
+- top deals
+- current signal
+- recent events
+
+### 4. Trigger alerts
+When rules are met:
+- activity log is updated
+- keyword can show alert indicator
+- Telegram message is sent
+
+---
+
+## Technical Direction
+
+### Language and storage
+- Go
+- MariaDB
+
+### Interface and architecture
+- TUI as main interface
+- domain model should be UI-neutral
+- JSON-ready contracts from the beginning
+- business logic should not depend on TUI rendering
+
+### High-level components
+- TUI layer
+- application/service layer
+- worker / scheduler
+- scraper / parser
+- grouping / dedup engine
+- alert engine
+- persistence layer
+- Telegram notifier
+
+---
+
+## Domain Model Direction
+
+We choose **Option B** for the core domain design.
+
+### Core entities
+- TrackedKeyword
+- ScanJob
+- RawListing
+- GroupedListing
+- MarketSnapshot
+- PricePoint
+- AlertRule
+- AlertEvent
+
+### Notes
+- keep raw and grouped results separate
+- MarketSnapshot should be a first-class object
+- event log should use one consistent structure
+- domain models must not include UI-only fields
+
+---
+
+## Proposed Core Entity Summary
+
+### TrackedKeyword
+Represents a user-defined tracked search target.
+
+Fields:
+- id
+- keyword
+- basic_filter
+- threshold_price
+- interval_minutes
+- telegram_enabled
+- status
+- created_at
+- updated_at
+
+### ScanJob
+Represents a monitoring execution for one tracked keyword.
+
+Fields:
+- id
+- tracked_keyword_id
+- started_at
+- finished_at
+- status
+- error_message
+- raw_count
+- grouped_count
+
+### RawListing
+Represents noisy marketplace data before grouping.
+
+Fields:
+- id
+- scan_job_id
+- source
+- title
+- normalized_title
+- seller_name
+- price
+- original_price
+- is_promo
+- url
+- scraped_at
+
+### GroupedListing
+Represents cleaned/grouped listing output for user-facing insights.
+
+Fields:
+- id
+- scan_job_id
+- group_key
+- representative_title
+- representative_seller
+- best_price
+- original_price
+- is_promo
+- listing_count
+- sample_url
+
+### MarketSnapshot
+Represents aggregated market state for one keyword at one point in time.
+
+Fields:
+- id
+- tracked_keyword_id
+- scan_job_id
+- min_price
+- avg_price
+- max_price
+- raw_count
+- grouped_count
+- signal
+- snapshot_at
+
+### PricePoint
+Represents historical market values used for trend analysis.
+
+Fields:
+- id
+- tracked_keyword_id
+- scan_job_id
+- min_price
+- avg_price
+- max_price
+- recorded_at
+
+### AlertRule
+Represents alert logic configuration.
+
+Fields:
+- id
+- tracked_keyword_id
+- rule_type
+- value
+- enabled
+- created_at
+
+### AlertEvent
+Represents an event or notification generated by the system.
+
+Fields:
+- id
+- tracked_keyword_id
+- scan_job_id
+- level
+- event_type
+- message
+- payload_json
+- sent_to_telegram
+- created_at
+
+---
+
+## Initial Signal Model
+
+Signals used in TUI and future API/web output:
+
+- BUY_NOW
+- GOOD_DEAL
+- NORMAL
+- NO_DATA
+
+---
+
+## JSON Contract Direction
+
+The internal system should be JSON-ready even though TUI remains the primary user experience.
+
+### Principles
+- TUI is for humans
+- JSON is for contracts and interoperability
+- web interface can later consume the same shapes
+- business logic should produce structured data first, then renderers/adapters can format it
+
+### Primary JSON shapes
+- TrackedKeyword JSON
+- GroupedListing JSON
+- MarketSnapshot JSON
+- AlertEvent JSON
+- KeywordDetail JSON
+- DashboardState JSON
+
+---
+
+## TUI Design Decision Summary
+
+### Main screen
+- keyword list on the left
+- selected keyword snapshot on the right
+- log panel at the bottom
+- shortcut row fixed at bottom
+
+### Detail screen
+- keyword summary
+- grouped results
+- recent history
+- actions
+
+### Keyboard shortcuts
+Main screen:
+- j / down
+- k / up
+- enter
+- a
+- e
+- d
+- r
+- /
+- q
+
+Detail screen:
+- b
+- e
+- space
+- t
+
+---
+
+## Storage Direction
+
+MariaDB remains the primary storage.
+
+Recommended storage approach:
+- relational tables for core data
+- optional JSON/text payloads for raw metadata or debugging
+- avoid making database schema the center of domain design
+
+---
+
+## Early Alert Strategy
+
+Initial alert logic:
+- below threshold
+- new lowest price
+- significant drop if supported by enough history
+
+Alert channels:
+- TUI activity log
+- Telegram
+
+---
+
+## Phased Roadmap
+
+### Phase 1 — POC
+- single-user
+- keyword tracking
+- periodic scan
+- grouping / dedup
+- market snapshot
+- TUI dashboard
+- Telegram alerts
+
+### Phase 2
+- stronger filtering
+- better grouping
+- more robust history
+- better signal quality
+
+### Phase 3
+- fake discount detection
+- seller behavior insights
+- recommendation refinement
+
+### Phase 4
+- web interface
+- API layer
+- subscription model
+- broader productization
+
+---
+
+## Immediate Next Steps
+
+1. Finalize domain fields and enums
+2. Define JSON contracts in more detail
+3. Design project structure in Go
+4. Design MariaDB schema based on the domain model
+5. Define worker flow and alert flow
+6. Start implementation after design is locked
+
+---
+
+## Decision Summary
+
+Locked decisions so far:
+
+- single-user POC first
+- keyword-based scanning as the core
+- Go + MariaDB
+- TUI keyboard-first design
+- Telegram first for external alerts
+- internal structured models
+- JSON-ready contracts
+- domain model option B
