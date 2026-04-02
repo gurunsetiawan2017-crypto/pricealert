@@ -1,0 +1,17 @@
+[
+  {
+    "name": "promo words and punctuation are removed conservatively",
+    "title": "Minyak Goreng 2L Promo Murah!!!",
+    "want_normalized": "minyak goreng 2l"
+  },
+  {
+    "name": "unit formatting is normalized",
+    "title": "MINYAK GORENG 2 Liter - Diskon",
+    "want_normalized": "minyak goreng 2l"
+  },
+  {
+    "name": "product form words stay meaningful",
+    "title": "Bimoli Minyak Goreng 2L Refill Ready Stock",
+    "want_normalized": "bimoli minyak goreng 2l refill"
+  }
+]
