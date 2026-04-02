@@ -2,6 +2,7 @@ package repository
 
 import (
 	"context"
+	"time"
 
 	"github.com/pricealert/pricealert/internal/domain"
 )
@@ -19,11 +20,13 @@ type ScanJobRepository interface {
 	MarkSuccess(context.Context, string, int, int) error
 	MarkFailed(context.Context, string, string) error
 	GetLatestByKeywordID(context.Context, string) (*domain.ScanJob, error)
+	ListRunning(context.Context, int) ([]domain.ScanJob, error)
 }
 
 type RawListingRepository interface {
 	CreateBatch(context.Context, []domain.RawListing) error
 	ListByScanJobID(context.Context, string) ([]domain.RawListing, error)
+	PruneOlderThanScrapedAt(context.Context, time.Time) (int, error)
 }
 
 type GroupedListingRepository interface {
@@ -39,6 +42,7 @@ type MarketSnapshotRepository interface {
 type PricePointRepository interface {
 	Create(context.Context, domain.PricePoint) error
 	ListRecentByKeywordID(context.Context, string, int) ([]domain.PricePoint, error)
+	PruneOlderThanRecordedAt(context.Context, time.Time) (int, error)
 }
 
 type AlertRuleRepository interface {
@@ -48,5 +52,7 @@ type AlertRuleRepository interface {
 
 type AlertEventRepository interface {
 	Create(context.Context, domain.AlertEvent) error
+	MarkSentToTelegram(context.Context, string) error
 	ListRecentByKeywordID(context.Context, string, int) ([]domain.AlertEvent, error)
+	PruneOlderThanCreatedAt(context.Context, time.Time) (int, error)
 }

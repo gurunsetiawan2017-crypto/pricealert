@@ -25,8 +25,11 @@ type Scheduler struct {
 }
 
 type RunResult struct {
-	Started []string
-	Skipped []string
+	Started         []string
+	Skipped         []string
+	CapacityBlocked []string
+	RunningCount    int
+	MaxConcurrent   int
 }
 
 func New(source KeywordSource, stateStore *state.Store, worker *worker.Worker, clock Clock) *Scheduler {
@@ -48,8 +51,9 @@ func (s *Scheduler) RunOnce(ctx context.Context) (RunResult, error) {
 	now := s.clock.Now()
 
 	result := RunResult{
-		Started: make([]string, 0),
-		Skipped: make([]string, 0),
+		Started:         make([]string, 0),
+		Skipped:         make([]string, 0),
+		CapacityBlocked: make([]string, 0),
 	}
 
 	for _, keyword := range keywords {
@@ -64,12 +68,20 @@ func (s *Scheduler) RunOnce(ctx context.Context) (RunResult, error) {
 		}
 
 		if !s.worker.Start(ctx, keyword) {
-			result.Skipped = append(result.Skipped, keyword.ID)
+			if s.state.Snapshot(keyword.ID).Running {
+				result.Skipped = append(result.Skipped, keyword.ID)
+			} else {
+				result.CapacityBlocked = append(result.CapacityBlocked, keyword.ID)
+			}
 			continue
 		}
 
 		result.Started = append(result.Started, keyword.ID)
 	}
+
+	workerStatus := s.worker.Status()
+	result.RunningCount = workerStatus.RunningCount
+	result.MaxConcurrent = workerStatus.MaxConcurrent
 
 	return result, nil
 }

@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/pricealert/pricealert/internal/domain"
+	"github.com/pricealert/pricealert/internal/dto"
 )
 
 func TestDashboardStateBuildsSelectedKeywordView(t *testing.T) {
@@ -42,6 +43,7 @@ func TestDashboardStateBuildsSelectedKeywordView(t *testing.T) {
 				},
 			},
 		},
+		nil,
 	)
 
 	selectedID := "kw_1"
@@ -81,6 +83,7 @@ func TestDashboardStateFallsBackToFirstVisibleKeyword(t *testing.T) {
 		&fakeSnapshotRepo{},
 		&fakePricePointRepo{},
 		&fakeAlertEventRepo{},
+		nil,
 	)
 
 	selectedID := "missing"
@@ -134,6 +137,7 @@ func TestKeywordDetailBuildsCompleteDTO(t *testing.T) {
 				},
 			},
 		},
+		nil,
 	)
 
 	detail, err := service.KeywordDetail(context.Background(), "kw_1")
@@ -169,6 +173,7 @@ func TestKeywordDetailAllowsMissingSnapshot(t *testing.T) {
 		&fakeSnapshotRepo{err: sql.ErrNoRows},
 		&fakePricePointRepo{},
 		&fakeAlertEventRepo{},
+		nil,
 	)
 
 	detail, err := service.KeywordDetail(context.Background(), "kw_1")
@@ -238,13 +243,17 @@ func (f *fakePricePointRepo) Create(context.Context, domain.PricePoint) error { 
 func (f *fakePricePointRepo) ListRecentByKeywordID(_ context.Context, keywordID string, _ int) ([]domain.PricePoint, error) {
 	return f.byKeywordID[keywordID], nil
 }
+func (f *fakePricePointRepo) PruneOlderThanRecordedAt(context.Context, time.Time) (int, error) {
+	return 0, nil
+}
 
 type fakeAlertEventRepo struct {
 	byKeywordID map[string][]domain.AlertEvent
 	err         error
 }
 
-func (f *fakeAlertEventRepo) Create(context.Context, domain.AlertEvent) error { return nil }
+func (f *fakeAlertEventRepo) Create(context.Context, domain.AlertEvent) error  { return nil }
+func (f *fakeAlertEventRepo) MarkSentToTelegram(context.Context, string) error { return nil }
 func (f *fakeAlertEventRepo) ListRecentByKeywordID(_ context.Context, keywordID string, limit int) ([]domain.AlertEvent, error) {
 	if f.err != nil {
 		return nil, f.err
@@ -254,6 +263,9 @@ func (f *fakeAlertEventRepo) ListRecentByKeywordID(_ context.Context, keywordID 
 		return events[:limit], nil
 	}
 	return events, nil
+}
+func (f *fakeAlertEventRepo) PruneOlderThanCreatedAt(context.Context, time.Time) (int, error) {
+	return 0, nil
 }
 
 var _ repositoryTrackedKeywordRepo = (*fakeTrackedKeywordRepo)(nil)
@@ -280,6 +292,7 @@ func TestDashboardStatePropagatesVisibleKeywordErrors(t *testing.T) {
 		&fakeSnapshotRepo{},
 		&fakePricePointRepo{},
 		&fakeAlertEventRepo{},
+		nil,
 	)
 
 	_, err := service.DashboardState(context.Background(), nil)
@@ -302,4 +315,53 @@ func (e *errorTrackedKeywordRepo) ListActive(context.Context) ([]domain.TrackedK
 }
 func (e *errorTrackedKeywordRepo) ListVisible(context.Context) ([]domain.TrackedKeyword, error) {
 	return nil, e.err
+}
+
+func TestDashboardStateIncludesRuntimeStatusSummary(t *testing.T) {
+	now := time.Date(2026, 4, 2, 10, 40, 0, 0, time.UTC)
+	service := NewService(
+		&fakeTrackedKeywordRepo{
+			visible: []domain.TrackedKeyword{
+				{ID: "kw_1", Keyword: "minyak goreng 2L", Status: domain.TrackedKeywordStatusActive},
+			},
+		},
+		&fakeGroupedListingRepo{},
+		&fakeSnapshotRepo{},
+		&fakePricePointRepo{},
+		&fakeAlertEventRepo{},
+		fakeRuntimeStatusProvider{
+			summary: &dto.RuntimeStatusSummary{
+				AcceptingNewWork:      true,
+				RunningCount:          1,
+				MaxConcurrent:         2,
+				ReconciledRunningJobs: 3,
+				LastReconciledAt:      &now,
+				PrunedRawListings:     9,
+				LastPrunedAt:          &now,
+			},
+		},
+	)
+
+	state, err := service.DashboardState(context.Background(), nil)
+	if err != nil {
+		t.Fatalf("DashboardState() error = %v", err)
+	}
+	if state.RuntimeStatus == nil {
+		t.Fatalf("runtime status = nil")
+	}
+	if state.RuntimeStatus.RunningCount != 1 || state.RuntimeStatus.MaxConcurrent != 2 {
+		t.Fatalf("runtime status = %#v", state.RuntimeStatus)
+	}
+	if state.RuntimeStatus.PrunedRawListings != 9 {
+		t.Fatalf("pruned raw listings = %d", state.RuntimeStatus.PrunedRawListings)
+	}
+}
+
+type fakeRuntimeStatusProvider struct {
+	summary *dto.RuntimeStatusSummary
+	err     error
+}
+
+func (f fakeRuntimeStatusProvider) Summary(context.Context) (*dto.RuntimeStatusSummary, error) {
+	return f.summary, f.err
 }

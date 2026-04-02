@@ -41,6 +41,7 @@ func TestExecuteHappyPath(t *testing.T) {
 				{Title: "Bimoli Minyak Goreng 2 Liter", SellerName: "Seller B", Price: 25000, URL: "https://example.com/2", Source: "tokopedia"},
 			},
 		},
+		nil,
 		ids,
 		clock,
 		scanJobs,
@@ -113,6 +114,7 @@ func TestExecuteScraperFailureMarksScanFailed(t *testing.T) {
 
 	service := NewService(
 		stubScraper{err: expectedErr},
+		nil,
 		ids,
 		clock,
 		scanJobs,
@@ -156,6 +158,7 @@ func TestExecuteNoDataStillCreatesSnapshotAndHistory(t *testing.T) {
 
 	service := NewService(
 		stubScraper{listings: []domain.RawListing{}},
+		nil,
 		ids,
 		clock,
 		scanJobs,
@@ -183,6 +186,58 @@ func TestExecuteNoDataStillCreatesSnapshotAndHistory(t *testing.T) {
 	}
 	if len(alertRepo.created) != 0 {
 		t.Fatalf("alert events persisted = %d, want %d", len(alertRepo.created), 0)
+	}
+}
+
+func TestExecuteDispatchesAlertNotificationsAfterPersist(t *testing.T) {
+	clock := &stubClock{
+		times: []time.Time{
+			time.Date(2026, 4, 2, 10, 0, 0, 0, time.UTC),
+			time.Date(2026, 4, 2, 10, 0, 5, 0, time.UTC),
+			time.Date(2026, 4, 2, 10, 0, 10, 0, time.UTC),
+			time.Date(2026, 4, 2, 10, 0, 15, 0, time.UTC),
+		},
+	}
+	ids := &stubIDs{values: []string{"scan_1", "raw_1", "grp_1", "snap_1", "pp_1", "evt_1"}}
+	alertRepo := &fakeAlertEventRepo{}
+	dispatcher := &fakeAlertDispatcher{}
+	service := NewService(
+		stubScraper{
+			listings: []domain.RawListing{
+				{Title: "Bimoli Minyak Goreng 2L Promo", SellerName: "Seller A", Price: 22000, URL: "https://example.com/1", Source: "tokopedia"},
+			},
+		},
+		dispatcher,
+		ids,
+		clock,
+		&fakeScanJobRepo{},
+		&fakeRawListingRepo{},
+		&fakeGroupedListingRepo{},
+		&fakeSnapshotRepo{},
+		&fakePricePointRepo{},
+		alertRepo,
+		grouping.NewService(),
+		snapshot.NewService(),
+		history.NewService(),
+		alert.NewService(),
+	)
+
+	threshold := int64(23000)
+	_, err := service.Execute(context.Background(), domain.TrackedKeyword{
+		ID:              "kw_1",
+		Keyword:         "minyak goreng 2L",
+		ThresholdPrice:  &threshold,
+		TelegramEnabled: true,
+	})
+	if err != nil {
+		t.Fatalf("Execute() error = %v", err)
+	}
+
+	if dispatcher.calls != 1 {
+		t.Fatalf("dispatcher calls = %d, want 1", dispatcher.calls)
+	}
+	if len(dispatcher.alerts) != 1 || dispatcher.alerts[0].ID != "evt_1" {
+		t.Fatalf("dispatched alerts = %#v", dispatcher.alerts)
 	}
 }
 
@@ -266,6 +321,10 @@ func (f *fakeScanJobRepo) GetLatestByKeywordID(_ context.Context, _ string) (*do
 	return nil, nil
 }
 
+func (f *fakeScanJobRepo) ListRunning(_ context.Context, _ int) ([]domain.ScanJob, error) {
+	return nil, nil
+}
+
 type fakeRawListingRepo struct {
 	created []domain.RawListing
 }
@@ -277,6 +336,10 @@ func (f *fakeRawListingRepo) CreateBatch(_ context.Context, listings []domain.Ra
 
 func (f *fakeRawListingRepo) ListByScanJobID(_ context.Context, _ string) ([]domain.RawListing, error) {
 	return nil, nil
+}
+
+func (f *fakeRawListingRepo) PruneOlderThanScrapedAt(_ context.Context, _ time.Time) (int, error) {
+	return 0, nil
 }
 
 type fakeGroupedListingRepo struct {
@@ -321,6 +384,10 @@ func (f *fakePricePointRepo) ListRecentByKeywordID(_ context.Context, _ string, 
 	return history, nil
 }
 
+func (f *fakePricePointRepo) PruneOlderThanRecordedAt(_ context.Context, _ time.Time) (int, error) {
+	return 0, nil
+}
+
 type fakeAlertEventRepo struct {
 	created      []domain.AlertEvent
 	recentEvents []domain.AlertEvent
@@ -331,10 +398,28 @@ func (f *fakeAlertEventRepo) Create(_ context.Context, event domain.AlertEvent) 
 	return nil
 }
 
+func (f *fakeAlertEventRepo) MarkSentToTelegram(_ context.Context, _ string) error {
+	return nil
+}
+
 func (f *fakeAlertEventRepo) ListRecentByKeywordID(_ context.Context, _ string, _ int) ([]domain.AlertEvent, error) {
 	events := make([]domain.AlertEvent, len(f.recentEvents))
 	copy(events, f.recentEvents)
 	return events, nil
+}
+
+func (f *fakeAlertEventRepo) PruneOlderThanCreatedAt(_ context.Context, _ time.Time) (int, error) {
+	return 0, nil
+}
+
+type fakeAlertDispatcher struct {
+	calls  int
+	alerts []domain.AlertEvent
+}
+
+func (f *fakeAlertDispatcher) DispatchActionable(_ context.Context, _ domain.TrackedKeyword, _ domain.MarketSnapshot, _ []domain.GroupedListing, alerts []domain.AlertEvent) {
+	f.calls++
+	f.alerts = append([]domain.AlertEvent(nil), alerts...)
 }
 
 func TestPrepareRawListingsSetsDefaults(t *testing.T) {
@@ -342,6 +427,7 @@ func TestPrepareRawListingsSetsDefaults(t *testing.T) {
 	ids := &stubIDs{values: []string{"raw_1"}}
 	service := NewService(
 		stubScraper{},
+		nil,
 		ids,
 		clock,
 		&fakeScanJobRepo{},

@@ -21,7 +21,7 @@ func TestActiveKeywordBecomesEligibleAndExecuted(t *testing.T) {
 	}
 	executor := newFakeExecutor()
 	stateStore := state.NewStore()
-	s := New(source, stateStore, worker.New(stateStore, executor, clock), clock)
+	s := New(source, stateStore, worker.New(stateStore, executor, clock, 2), clock)
 
 	result, err := s.RunOnce(context.Background())
 	if err != nil {
@@ -44,7 +44,7 @@ func TestPausedKeywordIsSkipped(t *testing.T) {
 	}
 	executor := newFakeExecutor()
 	stateStore := state.NewStore()
-	s := New(source, stateStore, worker.New(stateStore, executor, clock), clock)
+	s := New(source, stateStore, worker.New(stateStore, executor, clock, 2), clock)
 
 	result, err := s.RunOnce(context.Background())
 	if err != nil {
@@ -72,7 +72,7 @@ func TestOverlappingScanForSameKeywordIsBlocked(t *testing.T) {
 	executor := newFakeExecutor()
 	executor.blockKeyword("kw_1")
 	stateStore := state.NewStore()
-	s := New(source, stateStore, worker.New(stateStore, executor, clock), clock)
+	s := New(source, stateStore, worker.New(stateStore, executor, clock, 2), clock)
 
 	first, err := s.RunOnce(context.Background())
 	if err != nil {
@@ -107,7 +107,7 @@ func TestNextEligibleRunIsBasedOnCompletionTime(t *testing.T) {
 	}
 	executor := newFakeExecutor()
 	stateStore := state.NewStore()
-	s := New(source, stateStore, worker.New(stateStore, executor, clock), clock)
+	s := New(source, stateStore, worker.New(stateStore, executor, clock, 2), clock)
 
 	_, err := s.RunOnce(context.Background())
 	if err != nil {
@@ -145,7 +145,7 @@ func TestFailureOfOneScanDoesNotCrashSchedulingOthers(t *testing.T) {
 	executor := newFakeExecutor()
 	executor.failKeyword("kw_1", errors.New("scan failed"))
 	stateStore := state.NewStore()
-	s := New(source, stateStore, worker.New(stateStore, executor, clock), clock)
+	s := New(source, stateStore, worker.New(stateStore, executor, clock, 2), clock)
 
 	result, err := s.RunOnce(context.Background())
 	if err != nil {
@@ -159,6 +159,38 @@ func TestFailureOfOneScanDoesNotCrashSchedulingOthers(t *testing.T) {
 	if executor.callCount() != 2 {
 		t.Fatalf("executor calls = %d, want 2", executor.callCount())
 	}
+}
+
+func TestCapacityLimitBlocksAdditionalKeywords(t *testing.T) {
+	clock := &stubClock{current: time.Date(2026, 4, 2, 10, 0, 0, 0, time.UTC)}
+	source := stubSource{
+		keywords: []domain.TrackedKeyword{
+			{ID: "kw_1", Status: domain.TrackedKeywordStatusActive, IntervalMinutes: 5},
+			{ID: "kw_2", Status: domain.TrackedKeywordStatusActive, IntervalMinutes: 5},
+		},
+	}
+	executor := newFakeExecutor()
+	executor.blockKeyword("kw_1")
+	stateStore := state.NewStore()
+	s := New(source, stateStore, worker.New(stateStore, executor, clock, 1), clock)
+
+	result, err := s.RunOnce(context.Background())
+	if err != nil {
+		t.Fatalf("RunOnce() error = %v", err)
+	}
+
+	if len(result.Started) != 1 || result.Started[0] != "kw_1" {
+		t.Fatalf("started = %#v", result.Started)
+	}
+	if len(result.CapacityBlocked) != 1 || result.CapacityBlocked[0] != "kw_2" {
+		t.Fatalf("capacity blocked = %#v", result.CapacityBlocked)
+	}
+	if result.MaxConcurrent != 1 || result.RunningCount != 1 {
+		t.Fatalf("status = %#v", result)
+	}
+
+	executor.releaseKeyword("kw_1")
+	executor.waitForCompletions(t, 1)
 }
 
 type stubSource struct {

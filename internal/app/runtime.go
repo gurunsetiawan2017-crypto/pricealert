@@ -8,6 +8,7 @@ import (
 	"github.com/pricealert/pricealert/internal/config"
 	"github.com/pricealert/pricealert/internal/domain"
 	"github.com/pricealert/pricealert/internal/infra/idgen"
+	infNotifier "github.com/pricealert/pricealert/internal/infra/notifier"
 	infScraper "github.com/pricealert/pricealert/internal/infra/scraper"
 	"github.com/pricealert/pricealert/internal/repository"
 	rtscheduler "github.com/pricealert/pricealert/internal/runtime/scheduler"
@@ -16,6 +17,7 @@ import (
 	"github.com/pricealert/pricealert/internal/service/alert"
 	"github.com/pricealert/pricealert/internal/service/grouping"
 	"github.com/pricealert/pricealert/internal/service/history"
+	notifyservice "github.com/pricealert/pricealert/internal/service/notifier"
 	"github.com/pricealert/pricealert/internal/service/scan"
 	"github.com/pricealert/pricealert/internal/service/snapshot"
 )
@@ -43,11 +45,61 @@ func newAppRepositories(db *sql.DB) appRepositories {
 }
 
 type Runtime struct {
-	scheduler *rtscheduler.Scheduler
+	scheduler      *rtscheduler.Scheduler
+	worker         *rtworker.Worker
+	state          *rtstate.Store
+	startup        StartupReconciliationResult
+	pruning        RawListingPruneResult
+	alertPruning   AlertEventPruneResult
+	historyPruning PricePointPruneResult
 }
 
 func (r *Runtime) RunOnce(ctx context.Context) (rtscheduler.RunResult, error) {
 	return r.scheduler.RunOnce(ctx)
+}
+
+type RuntimeStatus struct {
+	AcceptingNewWork       bool
+	MaxConcurrent          int
+	RunningCount           int
+	TrackedKeywords        int
+	ReconciledRunningJobs  int
+	LastReconciledAt       *time.Time
+	PrunedRawListings      int
+	LastPrunedAt           *time.Time
+	PrunedAlertEvents      int
+	LastAlertPrunedAt      *time.Time
+	PrunedPricePoints      int
+	LastPricePointPrunedAt *time.Time
+}
+
+func (r *Runtime) Status() RuntimeStatus {
+	workerStatus := r.worker.Status()
+	stateSummary := r.state.Summary()
+
+	return RuntimeStatus{
+		AcceptingNewWork:       workerStatus.AcceptingNewWork,
+		MaxConcurrent:          workerStatus.MaxConcurrent,
+		RunningCount:           stateSummary.RunningCount,
+		TrackedKeywords:        stateSummary.KeywordsTracked,
+		ReconciledRunningJobs:  r.startup.ReconciledCount,
+		LastReconciledAt:       r.startup.ReconciledAt,
+		PrunedRawListings:      r.pruning.PrunedCount,
+		LastPrunedAt:           r.pruning.PrunedAt,
+		PrunedAlertEvents:      r.alertPruning.PrunedCount,
+		LastAlertPrunedAt:      r.alertPruning.PrunedAt,
+		PrunedPricePoints:      r.historyPruning.PrunedCount,
+		LastPricePointPrunedAt: r.historyPruning.PrunedAt,
+	}
+}
+
+func (r *Runtime) RuntimeStatus() RuntimeStatus {
+	return r.Status()
+}
+
+func (r *Runtime) Close(ctx context.Context) error {
+	r.worker.StopAcceptingNewWork()
+	return r.worker.Wait(ctx)
 }
 
 type trackedKeywordSourceAdapter struct {
@@ -71,17 +123,127 @@ func (a scanExecutorAdapter) Execute(ctx context.Context, keyword domain.Tracked
 	return err
 }
 
+type Clock interface {
+	Now() time.Time
+}
+
 type systemClock struct{}
 
 func (systemClock) Now() time.Time {
 	return time.Now().UTC()
 }
 
+const abandonedScanJobReason = "startup reconciliation: previous app run ended before scan completed"
+
+type StartupReconciliationResult struct {
+	ReconciledCount int
+	ReconciledAt    *time.Time
+}
+
+type RawListingPruneResult struct {
+	PrunedCount int
+	PrunedAt    *time.Time
+}
+
+type AlertEventPruneResult struct {
+	PrunedCount int
+	PrunedAt    *time.Time
+}
+
+type PricePointPruneResult struct {
+	PrunedCount int
+	PrunedAt    *time.Time
+}
+
+func reconcileAbandonedRunningScanJobs(ctx context.Context, scanJobs repository.ScanJobRepository, clock Clock) (StartupReconciliationResult, error) {
+	running, err := scanJobs.ListRunning(ctx, 1024)
+	if err != nil {
+		return StartupReconciliationResult{}, err
+	}
+	if len(running) == 0 {
+		now := clock.Now()
+		return StartupReconciliationResult{ReconciledAt: &now}, nil
+	}
+
+	for _, scanJob := range running {
+		if err := scanJobs.MarkFailed(ctx, scanJob.ID, abandonedScanJobReason); err != nil {
+			return StartupReconciliationResult{}, err
+		}
+	}
+
+	now := clock.Now()
+	return StartupReconciliationResult{
+		ReconciledCount: len(running),
+		ReconciledAt:    &now,
+	}, nil
+}
+
+func pruneRawListings(ctx context.Context, rawListings repository.RawListingRepository, retentionHours int, clock Clock) (RawListingPruneResult, error) {
+	if retentionHours <= 0 {
+		return RawListingPruneResult{}, nil
+	}
+
+	now := clock.Now()
+	cutoff := now.Add(-time.Duration(retentionHours) * time.Hour)
+	pruned, err := rawListings.PruneOlderThanScrapedAt(ctx, cutoff)
+	if err != nil {
+		return RawListingPruneResult{}, err
+	}
+
+	return RawListingPruneResult{
+		PrunedCount: pruned,
+		PrunedAt:    &now,
+	}, nil
+}
+
+func pruneAlertEvents(ctx context.Context, alertEvents repository.AlertEventRepository, retentionHours int, clock Clock) (AlertEventPruneResult, error) {
+	if retentionHours <= 0 {
+		return AlertEventPruneResult{}, nil
+	}
+
+	now := clock.Now()
+	cutoff := now.Add(-time.Duration(retentionHours) * time.Hour)
+	pruned, err := alertEvents.PruneOlderThanCreatedAt(ctx, cutoff)
+	if err != nil {
+		return AlertEventPruneResult{}, err
+	}
+
+	return AlertEventPruneResult{
+		PrunedCount: pruned,
+		PrunedAt:    &now,
+	}, nil
+}
+
+func prunePricePoints(ctx context.Context, pricePoints repository.PricePointRepository, retentionHours int, clock Clock) (PricePointPruneResult, error) {
+	if retentionHours <= 0 {
+		return PricePointPruneResult{}, nil
+	}
+
+	now := clock.Now()
+	cutoff := now.Add(-time.Duration(retentionHours) * time.Hour)
+	pruned, err := pricePoints.PruneOlderThanRecordedAt(ctx, cutoff)
+	if err != nil {
+		return PricePointPruneResult{}, err
+	}
+
+	return PricePointPruneResult{
+		PrunedCount: pruned,
+		PrunedAt:    &now,
+	}, nil
+}
+
 func newRuntime(cfg config.Config, repos appRepositories) *Runtime {
-	clock := systemClock{}
+	return newRuntimeWithClock(cfg, repos, systemClock{})
+}
+
+func newRuntimeWithClock(cfg config.Config, repos appRepositories, clock Clock) *Runtime {
+	idGenerator := idgen.NewULIDGenerator()
+	telegramSender := newTelegramSender(cfg)
+	notifierService := notifyservice.NewService(telegramSender, idGenerator, clock, repos.alertEvents)
 	scanService := scan.NewService(
 		infScraper.NewTokopedia(cfg.Scraper),
-		idgen.NewULIDGenerator(),
+		notifierService,
+		idGenerator,
 		clock,
 		repos.scanJobs,
 		repos.rawListings,
@@ -96,8 +258,16 @@ func newRuntime(cfg config.Config, repos appRepositories) *Runtime {
 	)
 
 	stateStore := rtstate.NewStore()
-	worker := rtworker.New(stateStore, scanExecutorAdapter{scan: scanService}, clock)
+	worker := rtworker.New(stateStore, scanExecutorAdapter{scan: scanService}, clock, cfg.Runtime.MaxConcurrentScans)
 	scheduler := rtscheduler.New(trackedKeywordSourceAdapter{repo: repos.trackedKeywords}, stateStore, worker, clock)
 
-	return &Runtime{scheduler: scheduler}
+	return &Runtime{scheduler: scheduler, worker: worker, state: stateStore}
+}
+
+func newTelegramSender(cfg config.Config) notifyservice.Sender {
+	if cfg.Telegram.BotToken == "" || cfg.Telegram.ChatID == "" {
+		return infNotifier.NewNoop()
+	}
+
+	return infNotifier.NewTelegram(cfg.Telegram)
 }

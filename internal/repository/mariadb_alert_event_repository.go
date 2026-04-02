@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"time"
 
 	"github.com/pricealert/pricealert/internal/domain"
 )
@@ -39,6 +40,20 @@ func (r *MariaDBAlertEventRepository) Create(ctx context.Context, event domain.A
 	)
 	if err != nil {
 		return fmt.Errorf("create alert event: %w", err)
+	}
+
+	return nil
+}
+
+func (r *MariaDBAlertEventRepository) MarkSentToTelegram(ctx context.Context, eventID string) error {
+	const query = `
+		UPDATE alert_events
+		SET sent_to_telegram = TRUE
+		WHERE id = ?
+	`
+
+	if _, err := r.db.ExecContext(ctx, query, eventID); err != nil {
+		return fmt.Errorf("mark alert event sent to telegram: %w", err)
 	}
 
 	return nil
@@ -100,6 +115,25 @@ func (r *MariaDBAlertEventRepository) ListRecentByKeywordID(ctx context.Context,
 	}
 
 	return events, nil
+}
+
+func (r *MariaDBAlertEventRepository) PruneOlderThanCreatedAt(ctx context.Context, cutoff time.Time) (int, error) {
+	const query = `
+		DELETE FROM alert_events
+		WHERE created_at < ?
+	`
+
+	result, err := r.db.ExecContext(ctx, query, cutoff)
+	if err != nil {
+		return 0, fmt.Errorf("prune alert events older than cutoff: %w", err)
+	}
+
+	rowsAffected, err := result.RowsAffected()
+	if err != nil {
+		return 0, fmt.Errorf("prune alert events rows affected: %w", err)
+	}
+
+	return int(rowsAffected), nil
 }
 
 var _ AlertEventRepository = (*MariaDBAlertEventRepository)(nil)

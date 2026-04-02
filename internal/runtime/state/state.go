@@ -12,6 +12,8 @@ type KeywordState struct {
 	NextEligibleAt time.Time
 	LastAttemptAt  *time.Time
 	LastFinishedAt *time.Time
+	LastError      *string
+	LastSuccessAt  *time.Time
 }
 
 type Store struct {
@@ -41,6 +43,25 @@ func (s *Store) Snapshot(keywordID string) KeywordState {
 	defer s.mu.RUnlock()
 
 	return s.states[keywordID]
+}
+
+type Summary struct {
+	KeywordsTracked int
+	RunningCount    int
+}
+
+func (s *Store) Summary() Summary {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	summary := Summary{KeywordsTracked: len(s.states)}
+	for _, keywordState := range s.states {
+		if keywordState.Running {
+			summary.RunningCount++
+		}
+	}
+
+	return summary
 }
 
 func (s *Store) IsEligible(keywordID string, now time.Time) bool {
@@ -74,7 +95,7 @@ func (s *Store) MarkRunning(keywordID string, startedAt time.Time) bool {
 	return true
 }
 
-func (s *Store) MarkFinished(keywordID string, finishedAt time.Time, intervalMinutes int) {
+func (s *Store) MarkFinished(keywordID string, finishedAt time.Time, intervalMinutes int, err error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -82,6 +103,13 @@ func (s *Store) MarkFinished(keywordID string, finishedAt time.Time, intervalMin
 	current.Running = false
 	current.LastFinishedAt = timePointer(finishedAt)
 	current.NextEligibleAt = finishedAt.Add(time.Duration(intervalMinutes) * time.Minute)
+	if err != nil {
+		message := err.Error()
+		current.LastError = &message
+	} else {
+		current.LastError = nil
+		current.LastSuccessAt = timePointer(finishedAt)
+	}
 	s.states[keywordID] = current
 }
 

@@ -143,4 +143,67 @@ func (r *MariaDBScanJobRepository) GetLatestByKeywordID(ctx context.Context, tra
 	return &scanJob, nil
 }
 
+func (r *MariaDBScanJobRepository) ListRunning(ctx context.Context, limit int) ([]domain.ScanJob, error) {
+	if limit <= 0 {
+		return []domain.ScanJob{}, nil
+	}
+
+	const query = `
+		SELECT id, tracked_keyword_id, started_at, finished_at, status,
+			error_message, raw_count, grouped_count
+		FROM scan_jobs
+		WHERE status = ?
+		ORDER BY started_at ASC, id ASC
+		LIMIT ?
+	`
+
+	rows, err := r.db.QueryContext(ctx, query, string(domain.ScanJobStatusRunning), limit)
+	if err != nil {
+		return nil, fmt.Errorf("list running scan jobs: %w", err)
+	}
+	defer rows.Close()
+
+	var scanJobs []domain.ScanJob
+	for rows.Next() {
+		var (
+			scanJob      domain.ScanJob
+			finishedAt   sql.NullTime
+			errorMessage sql.NullString
+			rawCount     sql.NullInt64
+			groupedCount sql.NullInt64
+			status       string
+		)
+
+		if err := rows.Scan(
+			&scanJob.ID,
+			&scanJob.TrackedKeywordID,
+			&scanJob.StartedAt,
+			&finishedAt,
+			&status,
+			&errorMessage,
+			&rawCount,
+			&groupedCount,
+		); err != nil {
+			return nil, fmt.Errorf("scan running scan job: %w", err)
+		}
+
+		scanJob.FinishedAt = timePointer(finishedAt)
+		scanJob.ErrorMessage = stringPointer(errorMessage)
+		if rawCount.Valid {
+			scanJob.RawCount = int(rawCount.Int64)
+		}
+		if groupedCount.Valid {
+			scanJob.GroupedCount = int(groupedCount.Int64)
+		}
+		scanJob.Status = domain.ScanJobStatus(status)
+		scanJobs = append(scanJobs, scanJob)
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate running scan jobs: %w", err)
+	}
+
+	return scanJobs, nil
+}
+
 var _ ScanJobRepository = (*MariaDBScanJobRepository)(nil)

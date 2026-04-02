@@ -25,8 +25,13 @@ type Scraper interface {
 	FetchListings(context.Context, domain.TrackedKeyword) ([]domain.RawListing, error)
 }
 
+type AlertDispatcher interface {
+	DispatchActionable(context.Context, domain.TrackedKeyword, domain.MarketSnapshot, []domain.GroupedListing, []domain.AlertEvent)
+}
+
 type Service struct {
 	scraper     Scraper
+	notifier    AlertDispatcher
 	idGenerator IDGenerator
 	clock       Clock
 	scanJobs    repository.ScanJobRepository
@@ -52,6 +57,7 @@ type Result struct {
 
 func NewService(
 	scraper Scraper,
+	notifier AlertDispatcher,
 	idGenerator IDGenerator,
 	clock Clock,
 	scanJobs repository.ScanJobRepository,
@@ -67,6 +73,7 @@ func NewService(
 ) *Service {
 	return &Service{
 		scraper:     scraper,
+		notifier:    notifier,
 		idGenerator: idGenerator,
 		clock:       clock,
 		scanJobs:    scanJobs,
@@ -148,6 +155,10 @@ func (s *Service) Execute(ctx context.Context, keyword domain.TrackedKeyword) (*
 			_ = s.scanJobs.MarkFailed(ctx, scanJob.ID, err.Error())
 			return nil, fmt.Errorf("persist alert event: %w", err)
 		}
+	}
+
+	if s.notifier != nil {
+		s.notifier.DispatchActionable(ctx, keyword, marketSnapshot, groupedListings, alerts)
 	}
 
 	if err := s.scanJobs.MarkSuccess(ctx, scanJob.ID, len(rawListings), len(groupedListings)); err != nil {

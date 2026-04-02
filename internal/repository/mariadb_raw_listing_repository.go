@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"time"
 
 	"github.com/pricealert/pricealert/internal/domain"
 )
@@ -113,6 +114,25 @@ func (r *MariaDBRawListingRepository) ListByScanJobID(ctx context.Context, scanJ
 	}
 
 	return listings, nil
+}
+
+func (r *MariaDBRawListingRepository) PruneOlderThanScrapedAt(ctx context.Context, cutoff time.Time) (int, error) {
+	const query = `
+		DELETE FROM raw_listings
+		WHERE scraped_at < ?
+	`
+
+	result, err := r.db.ExecContext(ctx, query, cutoff)
+	if err != nil {
+		return 0, fmt.Errorf("prune raw listings older than cutoff: %w", err)
+	}
+
+	rowsAffected, err := result.RowsAffected()
+	if err != nil {
+		return 0, fmt.Errorf("prune raw listings rows affected: %w", err)
+	}
+
+	return int(rowsAffected), nil
 }
 
 var _ RawListingRepository = (*MariaDBRawListingRepository)(nil)

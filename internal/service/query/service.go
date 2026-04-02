@@ -21,6 +21,11 @@ type Service struct {
 	snapshots       repository.MarketSnapshotRepository
 	pricePoints     repository.PricePointRepository
 	alertEvents     repository.AlertEventRepository
+	runtimeStatus   RuntimeStatusProvider
+}
+
+type RuntimeStatusProvider interface {
+	Summary(context.Context) (*dto.RuntimeStatusSummary, error)
 }
 
 func NewService(
@@ -29,6 +34,7 @@ func NewService(
 	snapshots repository.MarketSnapshotRepository,
 	pricePoints repository.PricePointRepository,
 	alertEvents repository.AlertEventRepository,
+	runtimeStatus RuntimeStatusProvider,
 ) *Service {
 	return &Service{
 		trackedKeywords: trackedKeywords,
@@ -36,6 +42,7 @@ func NewService(
 		snapshots:       snapshots,
 		pricePoints:     pricePoints,
 		alertEvents:     alertEvents,
+		runtimeStatus:   runtimeStatus,
 	}
 }
 
@@ -49,6 +56,13 @@ func (s *Service) DashboardState(ctx context.Context, selectedKeywordID *string)
 		TrackedKeywords: make([]dto.TrackedKeywordSummary, 0, len(keywords)),
 		TopDeals:        []dto.GroupedListing{},
 		RecentEvents:    []dto.AlertEvent{},
+	}
+	if s.runtimeStatus != nil {
+		summary, err := s.runtimeStatus.Summary(ctx)
+		if err != nil {
+			return nil, err
+		}
+		state.RuntimeStatus = summary
 	}
 	if len(keywords) == 0 {
 		return state, nil

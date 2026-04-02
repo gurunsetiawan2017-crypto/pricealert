@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"time"
 
 	"github.com/pricealert/pricealert/internal/domain"
 )
@@ -92,6 +93,25 @@ func (r *MariaDBPricePointRepository) ListRecentByKeywordID(ctx context.Context,
 	}
 
 	return points, nil
+}
+
+func (r *MariaDBPricePointRepository) PruneOlderThanRecordedAt(ctx context.Context, cutoff time.Time) (int, error) {
+	const query = `
+		DELETE FROM price_points
+		WHERE recorded_at < ?
+	`
+
+	result, err := r.db.ExecContext(ctx, query, cutoff)
+	if err != nil {
+		return 0, fmt.Errorf("prune price points older than cutoff: %w", err)
+	}
+
+	rowsAffected, err := result.RowsAffected()
+	if err != nil {
+		return 0, fmt.Errorf("prune price points rows affected: %w", err)
+	}
+
+	return int(rowsAffected), nil
 }
 
 var _ PricePointRepository = (*MariaDBPricePointRepository)(nil)

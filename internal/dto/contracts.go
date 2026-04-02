@@ -82,4 +82,38 @@ type DashboardState struct {
 	SelectedSnapshot  *MarketSnapshot         `json:"selected_snapshot"`
 	TopDeals          []GroupedListing        `json:"top_deals"`
 	RecentEvents      []AlertEvent            `json:"recent_events"`
+	RuntimeStatus     *RuntimeStatusSummary   `json:"runtime_status"`
+}
+
+type RuntimeStatusSummary struct {
+	AcceptingNewWork       bool       `json:"accepting_new_work"`
+	RunningCount           int        `json:"running_count"`
+	MaxConcurrent          int        `json:"max_concurrent"`
+	ReconciledRunningJobs  int        `json:"reconciled_running_jobs"`
+	LastReconciledAt       *time.Time `json:"last_reconciled_at"`
+	PrunedRawListings      int        `json:"pruned_raw_listings"`
+	LastPrunedAt           *time.Time `json:"last_pruned_at"`
+	PrunedAlertEvents      int        `json:"pruned_alert_events"`
+	LastAlertPrunedAt      *time.Time `json:"last_alert_pruned_at"`
+	PrunedPricePoints      int        `json:"pruned_price_points"`
+	LastPricePointPrunedAt *time.Time `json:"last_price_point_pruned_at"`
+}
+
+type TelegramTopListing struct {
+	RepresentativeTitle  string `json:"representative_title"`
+	RepresentativeSeller string `json:"representative_seller"`
+	BestPrice            int64  `json:"best_price"`
+	SampleURL            string `json:"sample_url"`
+}
+
+type TelegramAlertPayload struct {
+	TrackedKeywordID string              `json:"tracked_keyword_id"`
+	Keyword          string              `json:"keyword"`
+	EventType        string              `json:"event_type"`
+	Signal           string              `json:"signal"`
+	Message          string              `json:"message"`
+	BestPrice        *int64              `json:"best_price"`
+	ThresholdPrice   *int64              `json:"threshold_price"`
+	SnapshotAt       time.Time           `json:"snapshot_at"`
+	TopListing       *TelegramTopListing `json:"top_listing"`
 }
