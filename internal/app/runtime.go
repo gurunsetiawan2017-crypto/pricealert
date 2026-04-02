@@ -146,26 +146,28 @@ type AlertEventPruneResult struct {
 }
 
 func reconcileAbandonedRunningScanJobs(ctx context.Context, scanJobs repository.ScanJobRepository, clock Clock) (StartupReconciliationResult, error) {
-	running, err := scanJobs.ListRunning(ctx, 1024)
-	if err != nil {
-		return StartupReconciliationResult{}, err
-	}
-	if len(running) == 0 {
-		now := clock.Now()
-		return StartupReconciliationResult{ReconciledAt: &now}, nil
-	}
+	now := clock.Now()
+	reconciledCount := 0
 
-	for _, scanJob := range running {
-		if err := scanJobs.MarkFailed(ctx, scanJob.ID, abandonedScanJobReason); err != nil {
+	for {
+		running, err := scanJobs.ListRunning(ctx, 1024)
+		if err != nil {
 			return StartupReconciliationResult{}, err
 		}
-	}
+		if len(running) == 0 {
+			return StartupReconciliationResult{
+				ReconciledCount: reconciledCount,
+				ReconciledAt:    &now,
+			}, nil
+		}
 
-	now := clock.Now()
-	return StartupReconciliationResult{
-		ReconciledCount: len(running),
-		ReconciledAt:    &now,
-	}, nil
+		for _, scanJob := range running {
+			if err := scanJobs.MarkFailed(ctx, scanJob.ID, abandonedScanJobReason); err != nil {
+				return StartupReconciliationResult{}, err
+			}
+		}
+		reconciledCount += len(running)
+	}
 }
 
 func pruneRawListings(ctx context.Context, rawListings repository.RawListingRepository, retentionHours int, clock Clock) (RawListingPruneResult, error) {

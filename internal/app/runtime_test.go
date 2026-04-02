@@ -163,8 +163,8 @@ func TestReconcileAbandonedRunningScanJobsMarksRunningJobsFailed(t *testing.T) {
 	if err != nil {
 		t.Fatalf("reconcileAbandonedRunningScanJobs() error = %v", err)
 	}
-	if repo.listRunningCalls != 1 {
-		t.Fatalf("ListRunning calls = %d, want 1", repo.listRunningCalls)
+	if repo.listRunningCalls != 2 {
+		t.Fatalf("ListRunning calls = %d, want 2", repo.listRunningCalls)
 	}
 	if len(repo.markFailedIDs) != 2 {
 		t.Fatalf("mark failed ids = %#v", repo.markFailedIDs)
@@ -193,6 +193,43 @@ func TestReconcileAbandonedRunningScanJobsHandlesEmptySet(t *testing.T) {
 	}
 	if result.ReconciledCount != 0 {
 		t.Fatalf("reconciled count = %d, want 0", result.ReconciledCount)
+	}
+}
+
+func TestReconcileAbandonedRunningScanJobsReconcilesMultipleBatches(t *testing.T) {
+	clock := stubClock{current: time.Date(2026, 4, 2, 10, 5, 0, 0, time.UTC)}
+	repo := &fakeStartupScanJobRepo{
+		batches: [][]domain.ScanJob{
+			{{ID: "scan_1", Status: domain.ScanJobStatusRunning}},
+			{
+				{ID: "scan_2", Status: domain.ScanJobStatusRunning},
+				{ID: "scan_3", Status: domain.ScanJobStatusRunning},
+			},
+		},
+	}
+
+	result, err := reconcileAbandonedRunningScanJobs(context.Background(), repo, clock)
+	if err != nil {
+		t.Fatalf("reconcileAbandonedRunningScanJobs() error = %v", err)
+	}
+	if repo.listRunningCalls != 3 {
+		t.Fatalf("ListRunning calls = %d, want 3", repo.listRunningCalls)
+	}
+	if len(repo.markFailedIDs) != 3 {
+		t.Fatalf("mark failed ids = %#v", repo.markFailedIDs)
+	}
+	if result.ReconciledCount != 3 {
+		t.Fatalf("reconciled count = %d, want 3", result.ReconciledCount)
+	}
+}
+
+func TestDiscoverMigrationsIfPresentIgnoresMissingDir(t *testing.T) {
+	migrations, err := discoverMigrationsIfPresent("/tmp/pricealert-migrations-does-not-exist")
+	if err != nil {
+		t.Fatalf("discoverMigrationsIfPresent() error = %v", err)
+	}
+	if len(migrations) != 0 {
+		t.Fatalf("migrations = %#v, want empty", migrations)
 	}
 }
 
@@ -418,6 +455,7 @@ func minimalConfig() config.Config {
 
 type fakeStartupScanJobRepo struct {
 	running          []domain.ScanJob
+	batches          [][]domain.ScanJob
 	listRunningCalls int
 	markFailedIDs    []string
 	markFailedReason string
@@ -444,8 +482,15 @@ func (f *fakeStartupScanJobRepo) ListRunning(context.Context, int) ([]domain.Sca
 	if f.err != nil {
 		return nil, f.err
 	}
+	if len(f.batches) > 0 {
+		result := make([]domain.ScanJob, len(f.batches[0]))
+		copy(result, f.batches[0])
+		f.batches = f.batches[1:]
+		return result, nil
+	}
 	result := make([]domain.ScanJob, len(f.running))
 	copy(result, f.running)
+	f.running = nil
 	return result, nil
 }
 

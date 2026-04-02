@@ -3,6 +3,8 @@ package app
 import (
 	"context"
 	"database/sql"
+	"errors"
+	"io/fs"
 	"time"
 
 	"github.com/pricealert/pricealert/internal/config"
@@ -31,7 +33,7 @@ func New(cfg config.Config) (*App, error) {
 		return nil, err
 	}
 
-	migrations, err := infraDB.DiscoverMigrations(cfg.Paths.MigrationsDir)
+	migrations, err := discoverMigrationsIfPresent(cfg.Paths.MigrationsDir)
 	if err != nil {
 		return nil, err
 	}
@@ -93,4 +95,15 @@ func (a *App) RunRuntimeOnce(ctx context.Context) (rtscheduler.RunResult, error)
 
 func (a *App) RuntimeStatus() RuntimeStatus {
 	return a.runtime.Status()
+}
+
+func discoverMigrationsIfPresent(dir string) ([]infraDB.Migration, error) {
+	migrations, err := infraDB.DiscoverMigrations(dir)
+	if err != nil {
+		if errors.Is(err, fs.ErrNotExist) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	return migrations, nil
 }

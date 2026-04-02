@@ -69,6 +69,21 @@ func TestWorkerCloseStopsAcceptingAndWaitsForInflight(t *testing.T) {
 	}
 }
 
+func TestWorkerDoesNotAcquireSlotAfterShutdownBegins(t *testing.T) {
+	clock := fakeClock{now: time.Date(2026, 4, 2, 10, 0, 0, 0, time.UTC)}
+	stateStore := state.NewStore()
+	executor := newBlockingExecutor()
+	worker := New(stateStore, executor, clock, 1)
+
+	worker.StopAcceptingNewWork()
+	if worker.Start(context.Background(), domain.TrackedKeyword{ID: "kw_1", IntervalMinutes: 5}) {
+		t.Fatalf("expected start to be rejected after shutdown")
+	}
+	if status := worker.Status(); status.RunningCount != 0 {
+		t.Fatalf("running count = %d, want 0", status.RunningCount)
+	}
+}
+
 func TestWorkerRecordsFailureAndPanicAsLastError(t *testing.T) {
 	clock := fakeClock{now: time.Date(2026, 4, 2, 10, 0, 0, 0, time.UTC)}
 	stateStore := state.NewStore()

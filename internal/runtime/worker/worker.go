@@ -104,13 +104,11 @@ func (w *Worker) Wait(ctx context.Context) error {
 }
 
 func (w *Worker) tryAcquireSlot() bool {
-	w.mu.RLock()
-	accepting := w.accepting
-	w.mu.RUnlock()
-	if !accepting {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if !w.accepting {
 		return false
 	}
-
 	select {
 	case w.sem <- struct{}{}:
 		return true
