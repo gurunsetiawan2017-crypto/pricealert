@@ -12,6 +12,8 @@ const (
 	defaultLogLevel      = "info"
 	defaultMinInterval   = 5
 	defaultMaxConcurrent = 1
+	defaultDBDriver      = "mysql"
+	defaultMigrationsDir = "migrations"
 )
 
 // Config holds runtime configuration for the single-process v1 application.
@@ -19,6 +21,7 @@ type Config struct {
 	AppName string
 	Runtime RuntimeConfig
 	DB      DBConfig
+	Paths   PathsConfig
 }
 
 type RuntimeConfig struct {
@@ -29,12 +32,17 @@ type RuntimeConfig struct {
 }
 
 type DBConfig struct {
+	Driver   string
 	Host     string
 	Port     int
 	User     string
 	Password string
 	Name     string
 	Params   string
+}
+
+type PathsConfig struct {
+	MigrationsDir string
 }
 
 // Load reads configuration from environment variables and applies safe defaults
@@ -64,12 +72,16 @@ func Load() (Config, error) {
 			MaxConcurrentScans:  maxConcurrentScans,
 		},
 		DB: DBConfig{
+			Driver:   getEnv("PRICEALERT_DB_DRIVER", defaultDBDriver),
 			Host:     getEnv("PRICEALERT_DB_HOST", "127.0.0.1"),
 			Port:     dbPort,
 			User:     getEnv("PRICEALERT_DB_USER", "root"),
 			Password: getEnv("PRICEALERT_DB_PASSWORD", ""),
 			Name:     getEnv("PRICEALERT_DB_NAME", "pricealert"),
 			Params:   getEnv("PRICEALERT_DB_PARAMS", "parseTime=true&charset=utf8mb4&loc=UTC"),
+		},
+		Paths: PathsConfig{
+			MigrationsDir: getEnv("PRICEALERT_MIGRATIONS_DIR", defaultMigrationsDir),
 		},
 	}
 
@@ -93,8 +105,12 @@ func (c Config) Validate() error {
 		return fmt.Errorf("db port must be between 1 and 65535")
 	}
 
-	if c.DB.Host == "" || c.DB.User == "" || c.DB.Name == "" {
-		return fmt.Errorf("db host, user, and name are required")
+	if c.DB.Driver == "" || c.DB.Host == "" || c.DB.User == "" || c.DB.Name == "" {
+		return fmt.Errorf("db driver, host, user, and name are required")
+	}
+
+	if c.Paths.MigrationsDir == "" {
+		return fmt.Errorf("migrations dir is required")
 	}
 
 	return nil
