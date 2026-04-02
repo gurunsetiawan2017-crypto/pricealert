@@ -316,6 +316,8 @@ func (e *errorTrackedKeywordRepo) ListVisible(context.Context) ([]domain.Tracked
 
 func TestDashboardStateIncludesRuntimeStatusSummary(t *testing.T) {
 	now := time.Date(2026, 4, 2, 10, 40, 0, 0, time.UTC)
+	latestFailure := "tokopedia search request failed"
+	keywordFailure := "temporary scraper error"
 	service := NewService(
 		&fakeTrackedKeywordRepo{
 			visible: []domain.TrackedKeyword{
@@ -331,10 +333,20 @@ func TestDashboardStateIncludesRuntimeStatusSummary(t *testing.T) {
 				AcceptingNewWork:      true,
 				RunningCount:          1,
 				MaxConcurrent:         2,
+				FailedKeywords:        1,
+				LatestFailureMessage:  &latestFailure,
+				LastFailureAt:         &now,
 				ReconciledRunningJobs: 3,
 				LastReconciledAt:      &now,
 				PrunedRawListings:     9,
 				LastPrunedAt:          &now,
+			},
+			healthByKeywordID: map[string]*dto.RuntimeKeywordHealth{
+				"kw_1": {
+					Running:          true,
+					LastErrorMessage: &keywordFailure,
+					LastErrorAt:      &now,
+				},
 			},
 		},
 	)
@@ -349,16 +361,67 @@ func TestDashboardStateIncludesRuntimeStatusSummary(t *testing.T) {
 	if state.RuntimeStatus.RunningCount != 1 || state.RuntimeStatus.MaxConcurrent != 2 {
 		t.Fatalf("runtime status = %#v", state.RuntimeStatus)
 	}
+	if state.RuntimeStatus.FailedKeywords != 1 || state.RuntimeStatus.LatestFailureMessage == nil || *state.RuntimeStatus.LatestFailureMessage != latestFailure {
+		t.Fatalf("runtime status = %#v", state.RuntimeStatus)
+	}
+	if len(state.TrackedKeywords) != 1 || state.TrackedKeywords[0].RuntimeHealth == nil || !state.TrackedKeywords[0].RuntimeHealth.Running {
+		t.Fatalf("tracked keywords = %#v", state.TrackedKeywords)
+	}
 	if state.RuntimeStatus.PrunedRawListings != 9 {
 		t.Fatalf("pruned raw listings = %d", state.RuntimeStatus.PrunedRawListings)
 	}
 }
 
+func TestKeywordDetailIncludesRuntimeHealth(t *testing.T) {
+	now := time.Date(2026, 4, 2, 10, 40, 0, 0, time.UTC)
+	lastError := "tokopedia search request failed"
+	service := NewService(
+		&fakeTrackedKeywordRepo{
+			byID: map[string]*domain.TrackedKeyword{
+				"kw_1": {ID: "kw_1", Keyword: "minyak goreng 2L", Status: domain.TrackedKeywordStatusActive},
+			},
+		},
+		&fakeGroupedListingRepo{},
+		&fakeSnapshotRepo{},
+		&fakePricePointRepo{},
+		&fakeAlertEventRepo{},
+		fakeRuntimeStatusProvider{
+			healthByKeywordID: map[string]*dto.RuntimeKeywordHealth{
+				"kw_1": {
+					Running:          true,
+					LastSuccessAt:    &now,
+					LastErrorMessage: &lastError,
+					LastErrorAt:      &now,
+				},
+			},
+		},
+	)
+
+	detail, err := service.KeywordDetail(context.Background(), "kw_1")
+	if err != nil {
+		t.Fatalf("KeywordDetail() error = %v", err)
+	}
+	if detail.Keyword.RuntimeHealth == nil || !detail.Keyword.RuntimeHealth.Running {
+		t.Fatalf("runtime health = %#v", detail.Keyword.RuntimeHealth)
+	}
+	if detail.Keyword.RuntimeHealth.LastErrorMessage == nil || *detail.Keyword.RuntimeHealth.LastErrorMessage != lastError {
+		t.Fatalf("runtime health = %#v", detail.Keyword.RuntimeHealth)
+	}
+}
+
 type fakeRuntimeStatusProvider struct {
-	summary *dto.RuntimeStatusSummary
-	err     error
+	summary           *dto.RuntimeStatusSummary
+	healthByKeywordID map[string]*dto.RuntimeKeywordHealth
+	err               error
 }
 
 func (f fakeRuntimeStatusProvider) Summary(context.Context) (*dto.RuntimeStatusSummary, error) {
 	return f.summary, f.err
+}
+
+func (f fakeRuntimeStatusProvider) KeywordHealth(_ context.Context, keywordID string) (*dto.RuntimeKeywordHealth, error) {
+	if f.err != nil {
+		return nil, f.err
+	}
+	return f.healthByKeywordID[keywordID], nil
 }

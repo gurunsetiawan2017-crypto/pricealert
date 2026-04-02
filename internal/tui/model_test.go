@@ -5,6 +5,7 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 
@@ -21,7 +22,7 @@ func TestModelInitLoadsDashboard(t *testing.T) {
 		},
 	}
 
-	model := NewModel(query, fakeRuntimeTrigger{}, &fakeKeywordActions{})
+	model := NewModel(query, fakeRuntimeTrigger{}, &fakeBrowserOpener{}, &fakeKeywordActions{})
 	msg := model.Init()()
 	updated, _ := model.Update(msg)
 	got := updated.(Model)
@@ -50,7 +51,7 @@ func TestDashboardSelectionMovesAndLoadsDetail(t *testing.T) {
 		},
 	}
 
-	model := NewModel(query, fakeRuntimeTrigger{}, &fakeKeywordActions{})
+	model := NewModel(query, fakeRuntimeTrigger{}, &fakeBrowserOpener{}, &fakeKeywordActions{})
 	updated, cmd := model.Update(dashboardLoadedMsg{state: query.dashboard})
 	m := updated.(Model)
 
@@ -86,7 +87,7 @@ func TestDetailEscReturnsToDashboard(t *testing.T) {
 		},
 	}
 
-	model := NewModel(query, fakeRuntimeTrigger{}, &fakeKeywordActions{})
+	model := NewModel(query, fakeRuntimeTrigger{}, &fakeBrowserOpener{}, &fakeKeywordActions{})
 	model.screen = screenDetail
 	model.selectedKeywordID = stringPtr("kw_1")
 
@@ -102,7 +103,7 @@ func TestDetailEscReturnsToDashboard(t *testing.T) {
 }
 
 func TestViewShowsError(t *testing.T) {
-	model := NewModel(&fakeQueryService{}, fakeRuntimeTrigger{}, &fakeKeywordActions{})
+	model := NewModel(&fakeQueryService{}, fakeRuntimeTrigger{}, &fakeBrowserOpener{}, &fakeKeywordActions{})
 	model.err = errors.New("load failed")
 
 	if !strings.Contains(model.View(), "load failed") {
@@ -119,7 +120,7 @@ func TestRefreshRunsRuntimeAndReloadsDashboard(t *testing.T) {
 	}
 	runtime := fakeRuntimeTrigger{result: RuntimeRunResult{Started: []string{"kw_1"}, Skipped: []string{}}}
 
-	model := NewModel(query, runtime, &fakeKeywordActions{})
+	model := NewModel(query, runtime, &fakeBrowserOpener{}, &fakeKeywordActions{})
 	updated, cmd := model.Update(dashboardLoadedMsg{state: query.dashboard})
 	m := updated.(Model)
 
@@ -143,7 +144,7 @@ func TestRefreshRunsRuntimeAndReloadsDashboard(t *testing.T) {
 }
 
 func TestRefreshErrorShowsStatus(t *testing.T) {
-	model := NewModel(&fakeQueryService{}, fakeRuntimeTrigger{err: errors.New("runtime failed")}, &fakeKeywordActions{})
+	model := NewModel(&fakeQueryService{}, fakeRuntimeTrigger{err: errors.New("runtime failed")}, &fakeBrowserOpener{}, &fakeKeywordActions{})
 	model.screen = screenDashboard
 
 	updated, cmd := model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'r'}})
@@ -169,7 +170,7 @@ func TestAddKeywordInputAndSubmit(t *testing.T) {
 		},
 	}
 	actions := &fakeKeywordActions{}
-	model := NewModel(query, fakeRuntimeTrigger{}, actions)
+	model := NewModel(query, fakeRuntimeTrigger{}, &fakeBrowserOpener{}, actions)
 
 	updated, _ := model.Update(dashboardLoadedMsg{state: query.dashboard})
 	m := updated.(Model)
@@ -212,7 +213,7 @@ func TestPauseSelectedKeywordFromDashboard(t *testing.T) {
 		},
 	}
 	actions := &fakeKeywordActions{}
-	model := NewModel(query, fakeRuntimeTrigger{}, actions)
+	model := NewModel(query, fakeRuntimeTrigger{}, &fakeBrowserOpener{}, actions)
 
 	updated, _ := model.Update(dashboardLoadedMsg{state: query.dashboard})
 	m := updated.(Model)
@@ -233,12 +234,25 @@ func TestPauseSelectedKeywordFromDashboard(t *testing.T) {
 }
 
 func TestDashboardViewShowsRuntimeStatusSummary(t *testing.T) {
-	model := NewModel(&fakeQueryService{}, fakeRuntimeTrigger{}, &fakeKeywordActions{})
+	latestFailure := "tokopedia search request failed"
+	model := NewModel(&fakeQueryService{}, fakeRuntimeTrigger{}, &fakeBrowserOpener{}, &fakeKeywordActions{})
 	model.dashboard = &dto.DashboardState{
+		TrackedKeywords: []dto.TrackedKeywordSummary{
+			{
+				ID:      "kw_1",
+				Keyword: "Raspberry Pi 3",
+				Status:  "active",
+				RuntimeHealth: &dto.RuntimeKeywordHealth{
+					Running: true,
+				},
+			},
+		},
 		RuntimeStatus: &dto.RuntimeStatusSummary{
 			AcceptingNewWork:      true,
 			RunningCount:          1,
 			MaxConcurrent:         2,
+			FailedKeywords:        1,
+			LatestFailureMessage:  &latestFailure,
 			ReconciledRunningJobs: 3,
 			PrunedRawListings:     9,
 			PrunedAlertEvents:     5,
@@ -246,13 +260,22 @@ func TestDashboardViewShowsRuntimeStatusSummary(t *testing.T) {
 	}
 
 	view := model.View()
-	if !strings.Contains(view, "Runtime:") {
+	if !strings.Contains(view, "Runtime") {
 		t.Fatalf("view = %q", view)
 	}
 	if !strings.Contains(view, "Accepting New Work: yes") {
 		t.Fatalf("view = %q", view)
 	}
 	if !strings.Contains(view, "Running: 1 / 2") {
+		t.Fatalf("view = %q", view)
+	}
+	if !strings.Contains(view, "Keywords With Last Error: 1") {
+		t.Fatalf("view = %q", view)
+	}
+	if !strings.Contains(view, "Latest Failure: tokopedia search") {
+		t.Fatalf("view = %q", view)
+	}
+	if !strings.Contains(view, "runtime running now") {
 		t.Fatalf("view = %q", view)
 	}
 	if !strings.Contains(view, "Startup Reconciled: 3 running job(s)") {
@@ -262,6 +285,40 @@ func TestDashboardViewShowsRuntimeStatusSummary(t *testing.T) {
 		t.Fatalf("view = %q", view)
 	}
 	if !strings.Contains(view, "Startup Pruned Alert Events: 5") {
+		t.Fatalf("view = %q", view)
+	}
+}
+
+func TestDetailViewShowsKeywordRuntimeHealth(t *testing.T) {
+	now := time.Date(2026, 4, 2, 10, 40, 0, 0, time.UTC)
+	lastError := "tokopedia search request failed"
+	model := NewModel(&fakeQueryService{}, fakeRuntimeTrigger{}, &fakeBrowserOpener{}, &fakeKeywordActions{})
+	model.screen = screenDetail
+	model.detail = &dto.KeywordDetail{
+		Keyword: dto.TrackedKeyword{
+			ID:      "kw_1",
+			Keyword: "Raspberry Pi 3",
+			Status:  "active",
+			RuntimeHealth: &dto.RuntimeKeywordHealth{
+				Running:          true,
+				LastSuccessAt:    &now,
+				LastErrorMessage: &lastError,
+				LastErrorAt:      &now,
+			},
+		},
+	}
+
+	view := model.View()
+	if !strings.Contains(view, "Runtime Running: yes") {
+		t.Fatalf("view = %q", view)
+	}
+	if !strings.Contains(view, "Last Success: 2026-04-02") {
+		t.Fatalf("view = %q", view)
+	}
+	if !strings.Contains(view, "Last Error: tokopedia search request") {
+		t.Fatalf("view = %q", view)
+	}
+	if !strings.Contains(view, "Last Error At: 2026-04-02") {
 		t.Fatalf("view = %q", view)
 	}
 }
@@ -280,7 +337,7 @@ func TestEditThresholdFromDetail(t *testing.T) {
 		},
 	}
 	actions := &fakeKeywordActions{}
-	model := NewModel(query, fakeRuntimeTrigger{}, actions)
+	model := NewModel(query, fakeRuntimeTrigger{}, &fakeBrowserOpener{}, actions)
 	model.screen = screenDetail
 	model.detail = query.detailByKeywordID["kw_1"]
 	model.selectedKeywordID = stringPtr("kw_1")
@@ -331,7 +388,7 @@ func TestEditIntervalValidationShowsError(t *testing.T) {
 			},
 		},
 	}
-	model := NewModel(query, fakeRuntimeTrigger{}, &fakeKeywordActions{})
+	model := NewModel(query, fakeRuntimeTrigger{}, &fakeBrowserOpener{}, &fakeKeywordActions{})
 	model.screen = screenDetail
 	model.detail = query.detailByKeywordID["kw_1"]
 
@@ -373,7 +430,7 @@ func TestToggleTelegramFromDetail(t *testing.T) {
 		},
 	}
 	actions := &fakeKeywordActions{}
-	model := NewModel(query, fakeRuntimeTrigger{}, actions)
+	model := NewModel(query, fakeRuntimeTrigger{}, &fakeBrowserOpener{}, actions)
 	model.screen = screenDetail
 	model.detail = query.detailByKeywordID["kw_1"]
 
@@ -395,6 +452,124 @@ func TestToggleTelegramFromDetail(t *testing.T) {
 	}
 }
 
+func TestTabFocusAndEnterOpensDashboardDeal(t *testing.T) {
+	query := &fakeQueryService{
+		dashboard: &dto.DashboardState{
+			TrackedKeywords:   []dto.TrackedKeywordSummary{{ID: "kw_1", Keyword: "Raspberry Pi 3", Status: "active"}},
+			SelectedKeywordID: stringPtr("kw_1"),
+			TopDeals: []dto.GroupedListing{
+				{ID: "grp_1", RepresentativeTitle: "Deal 1", RepresentativeSeller: "Seller A", BestPrice: 25000, SampleURL: "https://example.com/deal-1"},
+				{ID: "grp_2", RepresentativeTitle: "Deal 2", RepresentativeSeller: "Seller B", BestPrice: 39000, SampleURL: "https://example.com/deal-2"},
+			},
+		},
+	}
+	browser := &fakeBrowserOpener{}
+	model := NewModel(query, fakeRuntimeTrigger{}, browser, &fakeKeywordActions{})
+
+	updated, _ := model.Update(dashboardLoadedMsg{state: query.dashboard})
+	m := updated.(Model)
+
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyTab})
+	m = updated.(Model)
+	if m.dashboardFocus != dashboardFocusDeals {
+		t.Fatalf("dashboard focus = %s", m.dashboardFocus)
+	}
+
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'j'}})
+	m = updated.(Model)
+	if m.dashboardDealIndex != 1 {
+		t.Fatalf("dashboard deal index = %d", m.dashboardDealIndex)
+	}
+
+	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	if cmd == nil {
+		t.Fatalf("expected open url command")
+	}
+	updated, _ = updated.(Model).Update(cmd())
+	m = updated.(Model)
+
+	if browser.lastURL != "https://example.com/deal-2" {
+		t.Fatalf("opened url = %q", browser.lastURL)
+	}
+	if !strings.Contains(m.statusMessage, "Opened link") {
+		t.Fatalf("status message = %q", m.statusMessage)
+	}
+}
+
+func TestEnterOpensDetailDealWhenFocused(t *testing.T) {
+	query := &fakeQueryService{
+		detailByKeywordID: map[string]*dto.KeywordDetail{
+			"kw_1": {
+				Keyword: dto.TrackedKeyword{ID: "kw_1", Keyword: "Raspberry Pi 3", Status: "active"},
+				TopDeals: []dto.GroupedListing{
+					{ID: "grp_1", RepresentativeTitle: "Deal 1", RepresentativeSeller: "Seller A", BestPrice: 25000, SampleURL: "https://example.com/deal-1"},
+				},
+			},
+		},
+	}
+	browser := &fakeBrowserOpener{}
+	model := NewModel(query, fakeRuntimeTrigger{}, browser, &fakeKeywordActions{})
+	model.screen = screenDetail
+	model.detail = query.detailByKeywordID["kw_1"]
+
+	updated, cmd := model.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	if cmd == nil {
+		t.Fatalf("expected open url command")
+	}
+	updated, _ = updated.(Model).Update(cmd())
+	m := updated.(Model)
+
+	if browser.lastURL != "https://example.com/deal-1" {
+		t.Fatalf("opened url = %q", browser.lastURL)
+	}
+	if !strings.Contains(m.statusMessage, "Opened link") {
+		t.Fatalf("status message = %q", m.statusMessage)
+	}
+}
+
+func TestForceScanFromDetailReloadsDetail(t *testing.T) {
+	query := &fakeQueryService{
+		detailByKeywordID: map[string]*dto.KeywordDetail{
+			"kw_1": {
+				Keyword: dto.TrackedKeyword{ID: "kw_1", Keyword: "Raspberry Pi 3", Status: "active"},
+			},
+		},
+	}
+	runtime := fakeRuntimeTrigger{}
+	model := NewModel(query, runtime, &fakeBrowserOpener{}, &fakeKeywordActions{})
+	model.screen = screenDetail
+	model.detail = query.detailByKeywordID["kw_1"]
+	model.selectedKeywordID = stringPtr("kw_1")
+
+	updated, cmd := model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'s'}})
+	if cmd == nil {
+		t.Fatalf("expected force scan command")
+	}
+	updated, _ = updated.(Model).Update(cmd())
+	m := updated.(Model)
+
+	if !strings.Contains(m.statusMessage, "Scan complete for Raspberry Pi 3") {
+		t.Fatalf("status message = %q", m.statusMessage)
+	}
+}
+
+func TestDetailViewShowsBasicFilterSyntaxHint(t *testing.T) {
+	model := NewModel(&fakeQueryService{}, fakeRuntimeTrigger{}, &fakeBrowserOpener{}, &fakeKeywordActions{})
+	model.screen = screenDetail
+	model.detail = &dto.KeywordDetail{
+		Keyword: dto.TrackedKeyword{
+			ID:      "kw_1",
+			Keyword: "Raspberry Pi 3",
+			Status:  "active",
+		},
+	}
+
+	view := model.View()
+	if !strings.Contains(view, "Syntax: token token -exclude") {
+		t.Fatalf("view = %q", view)
+	}
+}
+
 type fakeQueryService struct {
 	dashboard         *dto.DashboardState
 	dashboardErr      error
@@ -403,9 +578,15 @@ type fakeQueryService struct {
 }
 
 type fakeRuntimeTrigger struct {
-	result RuntimeRunResult
-	err    error
-	calls  int
+	result           RuntimeRunResult
+	err              error
+	calls            int
+	scanNowKeywordID string
+}
+
+type fakeBrowserOpener struct {
+	lastURL string
+	err     error
 }
 
 type fakeKeywordActions struct {
@@ -445,6 +626,16 @@ func (f *fakeQueryService) KeywordDetail(_ context.Context, keywordID string) (*
 
 func (f fakeRuntimeTrigger) RunOnce(context.Context) (RuntimeRunResult, error) {
 	return f.result, f.err
+}
+
+func (f fakeRuntimeTrigger) ScanNow(_ context.Context, keywordID string) error {
+	f.scanNowKeywordID = keywordID
+	return f.err
+}
+
+func (f *fakeBrowserOpener) OpenURL(_ context.Context, url string) error {
+	f.lastURL = url
+	return f.err
 }
 
 func (f *fakeKeywordActions) AddKeyword(_ context.Context, keyword string) error {

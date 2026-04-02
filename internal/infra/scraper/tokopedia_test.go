@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 
 	"net/http"
@@ -121,6 +122,132 @@ func TestParseTokopediaSearchResponseAllowsEmptyProducts(t *testing.T) {
 	}
 	if len(listings) != 0 {
 		t.Fatalf("listings length = %d, want 0", len(listings))
+	}
+}
+
+func TestTokopediaFetchListingsRetriesTransientHTTPStatus(t *testing.T) {
+	fixture := mustReadFixture(t, "tokopedia_search_response.json")
+	var attempts atomic.Int32
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		attempt := attempts.Add(1)
+		if attempt < 3 {
+			http.Error(w, "temporary failure", http.StatusServiceUnavailable)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write(fixture)
+	}))
+	defer server.Close()
+
+	client := NewTokopediaWithHTTPClient(config.ScraperConfig{
+		TokopediaSearchEndpoint: server.URL,
+		TimeoutSeconds:          5,
+		RowsPerScan:             10,
+		RetryAttempts:           3,
+		RetryBackoffMillis:      1,
+	}, server.Client())
+
+	listings, err := client.FetchListings(context.Background(), domain.TrackedKeyword{Keyword: "mouse"})
+	if err != nil {
+		t.Fatalf("FetchListings() error = %v", err)
+	}
+	if len(listings) != 2 {
+		t.Fatalf("listings length = %d, want 2", len(listings))
+	}
+	if attempts.Load() != 3 {
+		t.Fatalf("attempts = %d, want 3", attempts.Load())
+	}
+}
+
+func TestTokopediaFetchListingsDoesNotRetryPermanentHTTPStatus(t *testing.T) {
+	var attempts atomic.Int32
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		attempts.Add(1)
+		http.Error(w, "bad request", http.StatusBadRequest)
+	}))
+	defer server.Close()
+
+	client := NewTokopediaWithHTTPClient(config.ScraperConfig{
+		TokopediaSearchEndpoint: server.URL,
+		TimeoutSeconds:          5,
+		RowsPerScan:             10,
+		RetryAttempts:           3,
+		RetryBackoffMillis:      1,
+	}, server.Client())
+
+	_, err := client.FetchListings(context.Background(), domain.TrackedKeyword{Keyword: "mouse"})
+	if err == nil {
+		t.Fatalf("FetchListings() error = nil, want error")
+	}
+	if attempts.Load() != 1 {
+		t.Fatalf("attempts = %d, want 1", attempts.Load())
+	}
+}
+
+func TestParseTokopediaSearchResponseUsesFirstUsableEnvelope(t *testing.T) {
+	body := []byte(`[
+		{"data":{"searchProductV5":{"header":{"responseCode":0},"data":{}}}},
+		{"data":{"searchProductV5":{"header":{"responseCode":0},"data":{"products":[
+			{"name":"Produk A","url":"/shop/produk-a","shop":{"name":"Toko A"},"price":{"text":"Rp12.000","number":12000,"original":"","discountPercentage":0}}
+		]}}}}
+	]`)
+
+	listings, err := parseTokopediaSearchResponse(body)
+	if err != nil {
+		t.Fatalf("parseTokopediaSearchResponse() error = %v", err)
+	}
+	if len(listings) != 1 {
+		t.Fatalf("listings length = %d, want 1", len(listings))
+	}
+	if listings[0].Title != "Produk A" {
+		t.Fatalf("title = %q, want Produk A", listings[0].Title)
+	}
+}
+
+func TestParseTokopediaSearchResponseSkipsMalformedProducts(t *testing.T) {
+	body := []byte(`[
+		{"data":{"searchProductV5":{"header":{"responseCode":0},"data":{"products":[
+			{"name":"Tanpa Harga","url":"/shop/tanpa-harga","shop":{"name":"Toko A"},"price":{"text":"","number":0,"original":"","discountPercentage":0}},
+			{"name":"Tanpa URL","url":"","shop":{"name":"Toko B"},"price":{"text":"Rp10.000","number":10000,"original":"","discountPercentage":0}},
+			{"name":"Valid","url":"/shop/valid","shop":{"name":"Toko C"},"price":{"text":"Rp15.000","number":15000,"original":"","discountPercentage":0}}
+		]}}}}
+	]`)
+
+	listings, err := parseTokopediaSearchResponse(body)
+	if err != nil {
+		t.Fatalf("parseTokopediaSearchResponse() error = %v", err)
+	}
+	if len(listings) != 1 {
+		t.Fatalf("listings length = %d, want 1", len(listings))
+	}
+	if listings[0].Title != "Valid" {
+		t.Fatalf("title = %q, want Valid", listings[0].Title)
+	}
+}
+
+func TestParseTokopediaSearchResponseSupportsSingleEnvelopeShape(t *testing.T) {
+	body := []byte(`{
+		"data":{
+			"searchProductV5":{
+				"header":{"responseCode":0},
+				"data":{"products":[
+					{"name":"Produk Tunggal","url":"/shop/produk-tunggal","shop":{"name":"Toko Tunggal"},"price":{"text":"Rp9.000","number":9000,"original":"","discountPercentage":0}}
+				]}
+			}
+		}
+	}`)
+
+	listings, err := parseTokopediaSearchResponse(body)
+	if err != nil {
+		t.Fatalf("parseTokopediaSearchResponse() error = %v", err)
+	}
+	if len(listings) != 1 {
+		t.Fatalf("listings length = %d, want 1", len(listings))
+	}
+	if listings[0].URL != "https://www.tokopedia.com/shop/produk-tunggal" {
+		t.Fatalf("url = %q", listings[0].URL)
 	}
 }
 

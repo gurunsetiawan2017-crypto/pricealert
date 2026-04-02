@@ -78,19 +78,29 @@ func New(cfg config.Config) (*App, error) {
 }
 
 func (a *App) Run() error {
+	runtimeLoop := startRuntimeLoop(context.Background(), a.runtime, autonomousRuntimeLoopInterval(a.cfg), nil)
+
 	defer func() {
+		loopCtx, loopCancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer loopCancel()
+		_ = runtimeLoop.Stop(loopCtx)
+
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
 		_ = a.runtime.Close(shutdownCtx)
 		_ = a.db.Close()
 	}()
 
-	_, err := newTUIProgram(a.queries, newRuntimeTrigger(a), newKeywordActions(a.keywords)).Run()
+	_, err := newTUIProgram(a.queries, newRuntimeTrigger(a), newBrowserOpener(), newKeywordActions(a.keywords)).Run()
 	return err
 }
 
 func (a *App) RunRuntimeOnce(ctx context.Context) (rtscheduler.RunResult, error) {
 	return a.runtime.RunOnce(ctx)
+}
+
+func (a *App) ScanKeywordNow(ctx context.Context, keywordID string) error {
+	return a.runtime.ScanKeywordNow(ctx, keywordID)
 }
 
 func (a *App) RuntimeStatus() RuntimeStatus {

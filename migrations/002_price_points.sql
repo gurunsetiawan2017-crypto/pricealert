@@ -1,8 +1,6 @@
 -- PriceAlert v1 price points schema
 -- Adds persisted grouped-market history points for snapshot-driven history.
 
--- Up
-
 CREATE TABLE price_points (
     id CHAR(26) NOT NULL,
     tracked_keyword_id CHAR(26) NOT NULL,
@@ -20,7 +18,3 @@ CREATE TABLE price_points (
         FOREIGN KEY (scan_job_id) REFERENCES scan_jobs (id)
         ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
-
--- Down
-
-DROP TABLE IF EXISTS price_points;

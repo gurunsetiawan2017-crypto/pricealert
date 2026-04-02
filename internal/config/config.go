@@ -16,6 +16,8 @@ const (
 	defaultMigrationsDir           = "migrations"
 	defaultScraperRows             = 10
 	defaultScraperTimeoutSeconds   = 20
+	defaultScraperRetryAttempts    = 3
+	defaultScraperRetryBackoffMS   = 500
 	defaultTokopediaSearchEndpoint = "https://gql.tokopedia.com/graphql/SearchProductV5Query"
 	defaultTelegramAPIBaseURL      = "https://api.telegram.org"
 	defaultTelegramTimeoutSeconds  = 10
@@ -59,6 +61,8 @@ type ScraperConfig struct {
 	TokopediaSearchEndpoint string
 	TimeoutSeconds          int
 	RowsPerScan             int
+	RetryAttempts           int
+	RetryBackoffMillis      int
 }
 
 type TelegramConfig struct {
@@ -97,6 +101,16 @@ func Load() (Config, error) {
 	}
 
 	scraperRows, err := getEnvInt("PRICEALERT_SCRAPER_ROWS_PER_SCAN", defaultScraperRows)
+	if err != nil {
+		return Config{}, err
+	}
+
+	scraperRetryAttempts, err := getEnvInt("PRICEALERT_SCRAPER_RETRY_ATTEMPTS", defaultScraperRetryAttempts)
+	if err != nil {
+		return Config{}, err
+	}
+
+	scraperRetryBackoffMillis, err := getEnvInt("PRICEALERT_SCRAPER_RETRY_BACKOFF_MS", defaultScraperRetryBackoffMS)
 	if err != nil {
 		return Config{}, err
 	}
@@ -140,6 +154,8 @@ func Load() (Config, error) {
 			TokopediaSearchEndpoint: getEnv("PRICEALERT_TOKOPEDIA_SEARCH_ENDPOINT", defaultTokopediaSearchEndpoint),
 			TimeoutSeconds:          scraperTimeoutSeconds,
 			RowsPerScan:             scraperRows,
+			RetryAttempts:           scraperRetryAttempts,
+			RetryBackoffMillis:      scraperRetryBackoffMillis,
 		},
 		Telegram: TelegramConfig{
 			BotToken:       getEnv("PRICEALERT_TELEGRAM_BOT_TOKEN", ""),
@@ -191,6 +207,12 @@ func (c Config) Validate() error {
 
 	if c.Scraper.RowsPerScan <= 0 {
 		return fmt.Errorf("scraper rows per scan must be > 0")
+	}
+	if c.Scraper.RetryAttempts <= 0 {
+		return fmt.Errorf("scraper retry attempts must be > 0")
+	}
+	if c.Scraper.RetryBackoffMillis <= 0 {
+		return fmt.Errorf("scraper retry backoff ms must be > 0")
 	}
 
 	if c.Telegram.TimeoutSeconds <= 0 {

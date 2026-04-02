@@ -48,6 +48,9 @@ func (s *Store) Snapshot(keywordID string) KeywordState {
 type Summary struct {
 	KeywordsTracked int
 	RunningCount    int
+	FailedKeywords  int
+	LatestFailureAt *time.Time
+	LatestFailure   *string
 }
 
 func (s *Store) Summary() Summary {
@@ -58,6 +61,14 @@ func (s *Store) Summary() Summary {
 	for _, keywordState := range s.states {
 		if keywordState.Running {
 			summary.RunningCount++
+		}
+		if keywordState.LastError != nil {
+			summary.FailedKeywords++
+			if isLaterTime(keywordState.LastFinishedAt, summary.LatestFailureAt) ||
+				(summary.LatestFailureAt == nil && keywordState.LastAttemptAt != nil && isLaterTime(keywordState.LastAttemptAt, summary.LatestFailureAt)) {
+				summary.LatestFailureAt = cloneTime(firstNonNilTime(keywordState.LastFinishedAt, keywordState.LastAttemptAt))
+				summary.LatestFailure = cloneString(keywordState.LastError)
+			}
 		}
 	}
 
@@ -115,5 +126,40 @@ func (s *Store) MarkFinished(keywordID string, finishedAt time.Time, intervalMin
 
 func timePointer(value time.Time) *time.Time {
 	v := value
+	return &v
+}
+
+func isLaterTime(candidate, current *time.Time) bool {
+	if candidate == nil {
+		return false
+	}
+	if current == nil {
+		return true
+	}
+	return candidate.After(*current)
+}
+
+func firstNonNilTime(values ...*time.Time) *time.Time {
+	for _, value := range values {
+		if value != nil {
+			return value
+		}
+	}
+	return nil
+}
+
+func cloneTime(value *time.Time) *time.Time {
+	if value == nil {
+		return nil
+	}
+	v := *value
+	return &v
+}
+
+func cloneString(value *string) *string {
+	if value == nil {
+		return nil
+	}
+	v := *value
 	return &v
 }

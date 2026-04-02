@@ -1,0 +1,14 @@
+# Default reviewers
+* @gurunsetiawan2017-crypto
+
+# High-risk runtime and scraper areas
+/internal/runtime/ @gurunsetiawan2017-crypto
+/internal/infra/scraper/ @gurunsetiawan2017-crypto
+/internal/service/scan/ @gurunsetiawan2017-crypto
+/internal/service/alert/ @gurunsetiawan2017-crypto
+/internal/service/grouping/ @gurunsetiawan2017-crypto
+
+# Persistence and operational config
+/migrations/ @gurunsetiawan2017-crypto
+/.github/ @gurunsetiawan2017-crypto
+/scripts/ @gurunsetiawan2017-crypto

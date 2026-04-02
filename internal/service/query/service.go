@@ -26,6 +26,7 @@ type Service struct {
 
 type RuntimeStatusProvider interface {
 	Summary(context.Context) (*dto.RuntimeStatusSummary, error)
+	KeywordHealth(context.Context, string) (*dto.RuntimeKeywordHealth, error)
 }
 
 func NewService(
@@ -73,11 +74,19 @@ func (s *Service) DashboardState(ctx context.Context, selectedKeywordID *string)
 		if err != nil {
 			return nil, err
 		}
+		var runtimeHealth *dto.RuntimeKeywordHealth
+		if s.runtimeStatus != nil {
+			runtimeHealth, err = s.runtimeStatus.KeywordHealth(ctx, keyword.ID)
+			if err != nil {
+				return nil, err
+			}
+		}
 		state.TrackedKeywords = append(state.TrackedKeywords, dto.TrackedKeywordSummary{
-			ID:          keyword.ID,
-			Keyword:     keyword.Keyword,
-			Status:      string(keyword.Status),
-			HasNewAlert: hasNewAlert(events),
+			ID:            keyword.ID,
+			Keyword:       keyword.Keyword,
+			Status:        string(keyword.Status),
+			HasNewAlert:   hasNewAlert(events),
+			RuntimeHealth: runtimeHealth,
 		})
 	}
 
@@ -123,6 +132,13 @@ func (s *Service) KeywordDetail(ctx context.Context, keywordID string) (*dto.Key
 		TopDeals:      []dto.GroupedListing{},
 		RecentEvents:  []dto.AlertEvent{},
 		RecentHistory: []dto.PricePoint{},
+	}
+	if s.runtimeStatus != nil {
+		runtimeHealth, err := s.runtimeStatus.KeywordHealth(ctx, keywordID)
+		if err != nil {
+			return nil, err
+		}
+		detail.Keyword.RuntimeHealth = runtimeHealth
 	}
 
 	snapshot, err := s.snapshots.GetLatestByKeywordID(ctx, keywordID)

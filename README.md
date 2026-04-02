@@ -142,7 +142,13 @@ At the moment the app expects the schema to already exist. Apply:
 - [migrations/001_init.sql](/home/iwan/Project/pricealert/migrations/001_init.sql)
 - [migrations/002_price_points.sql](/home/iwan/Project/pricealert/migrations/002_price_points.sql)
 
-Example with MariaDB client:
+Preferred helper script:
+
+```bash
+./scripts/apply-migrations.sh
+```
+
+Equivalent manual commands:
 
 ```bash
 mariadb -h127.0.0.1 -uroot -ppassword pricealert < migrations/001_init.sql
@@ -159,6 +165,13 @@ From the repository root:
 go run ./cmd/pricealert
 ```
 
+Or use the helper script:
+
+```bash
+cp .env.example .env
+./scripts/run-local.sh
+```
+
 This starts the single-process local app:
 - Bubble Tea TUI
 - bounded runtime scheduler/worker
@@ -170,6 +183,21 @@ This starts the single-process local app:
 - if Telegram config is omitted, the app still runs and uses a no-op notifier
 - startup maintenance may reconcile abandoned `running` scan jobs and prune old raw listings / alert events
 - the Tokopedia adapter is still a feasibility adapter, so scraper behavior may need further hardening
+
+## GitHub Quality Gates
+
+This repository now includes a small GitHub quality baseline under `.github/`:
+
+- CI workflow for formatting, `go mod tidy`, `go vet`, and `go test ./...`
+- dependency review on pull requests
+- Dependabot version/security update configuration
+- CODEOWNERS for higher-risk runtime, scraper, scan, and migration areas
+- PR template for summary, validation, and risk
+
+Recommended repository-side settings such as branch protection, secret scanning,
+Dependabot alerts, and CodeQL default setup are documented in:
+
+- [docs/github-setup-v1.md](/home/iwan/Project/pricealert/docs/github-setup-v1.md)
 
 ## Recommended Build Order
 

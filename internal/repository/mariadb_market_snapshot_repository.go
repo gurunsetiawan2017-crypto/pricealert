@@ -21,7 +21,7 @@ func (r *MariaDBMarketSnapshotRepository) Create(ctx context.Context, snapshot d
 	const query = `
 		INSERT INTO market_snapshots (
 			id, tracked_keyword_id, scan_job_id, min_price, avg_price, max_price,
-			raw_count, grouped_count, signal, snapshot_at
+			raw_count, grouped_count, ` + "`signal`" + `, snapshot_at
 		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	`
 
@@ -49,7 +49,7 @@ func (r *MariaDBMarketSnapshotRepository) Create(ctx context.Context, snapshot d
 func (r *MariaDBMarketSnapshotRepository) GetLatestByKeywordID(ctx context.Context, trackedKeywordID string) (*domain.MarketSnapshot, error) {
 	const query = `
 		SELECT id, tracked_keyword_id, scan_job_id, min_price, avg_price, max_price,
-			raw_count, grouped_count, signal, snapshot_at
+			raw_count, grouped_count, ` + "`signal`" + `, snapshot_at
 		FROM market_snapshots
 		WHERE tracked_keyword_id = ?
 		ORDER BY snapshot_at DESC, id DESC

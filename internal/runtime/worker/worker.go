@@ -2,6 +2,7 @@ package worker
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sync"
 	"time"
@@ -27,6 +28,12 @@ type Worker struct {
 	mu        sync.RWMutex
 	accepting bool
 }
+
+var (
+	ErrNotAcceptingNewWork   = errors.New("worker is not accepting new work")
+	ErrAtCapacity            = errors.New("worker is at capacity")
+	ErrKeywordAlreadyRunning = errors.New("keyword scan is already running")
+)
 
 func New(stateStore *state.Store, executor Executor, clock Clock, maxConcurrent int) *Worker {
 	if maxConcurrent <= 0 {
@@ -63,6 +70,24 @@ func (w *Worker) Start(ctx context.Context, keyword domain.TrackedKeyword) bool 
 	}()
 
 	return true
+}
+
+func (w *Worker) ExecuteNow(ctx context.Context, keyword domain.TrackedKeyword) error {
+	acquired, acquireErr := w.tryAcquireSlotWithReason()
+	if !acquired {
+		return acquireErr
+	}
+
+	startedAt := w.clock.Now()
+	if !w.state.MarkRunning(keyword.ID, startedAt) {
+		w.releaseSlot()
+		return ErrKeywordAlreadyRunning
+	}
+
+	defer w.releaseSlot()
+	err := safelyExecute(ctx, w.executor, keyword)
+	w.state.MarkFinished(keyword.ID, w.clock.Now(), keyword.IntervalMinutes, err)
+	return err
 }
 
 func (w *Worker) Status() Status {
@@ -104,16 +129,21 @@ func (w *Worker) Wait(ctx context.Context) error {
 }
 
 func (w *Worker) tryAcquireSlot() bool {
+	acquired, _ := w.tryAcquireSlotWithReason()
+	return acquired
+}
+
+func (w *Worker) tryAcquireSlotWithReason() (bool, error) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	if !w.accepting {
-		return false
+		return false, ErrNotAcceptingNewWork
 	}
 	select {
 	case w.sem <- struct{}{}:
-		return true
+		return true, nil
 	default:
-		return false
+		return false, ErrAtCapacity
 	}
 }
 

@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"os/exec"
 
 	"github.com/charmbracelet/bubbletea"
 
@@ -33,13 +34,14 @@ func newKeywordService(repos appRepositories, defaultIntervalMins int) *kwservic
 	)
 }
 
-func newTUIProgram(queries *query.Service, trigger runtimeTriggerAdapter, keywords keywordActionAdapter) *tea.Program {
-	model := tui.NewModel(queries, trigger, keywords)
-	return tea.NewProgram(model)
+func newTUIProgram(queries *query.Service, trigger runtimeTriggerAdapter, browser browserOpenerAdapter, keywords keywordActionAdapter) *tea.Program {
+	model := tui.NewModel(queries, trigger, browser, keywords)
+	return tea.NewProgram(model, tea.WithInputTTY(), tea.WithAltScreen())
 }
 
 type runtimeStatusSource interface {
 	RuntimeStatus() RuntimeStatus
+	KeywordRuntimeStatus(string) RuntimeKeywordStatus
 }
 
 type runtimeStatusAdapter struct {
@@ -53,28 +55,46 @@ func newRuntimeStatusAdapter(source runtimeStatusSource) runtimeStatusAdapter {
 func (a runtimeStatusAdapter) Summary(context.Context) (*dto.RuntimeStatusSummary, error) {
 	status := a.source.RuntimeStatus()
 	return &dto.RuntimeStatusSummary{
-		AcceptingNewWork:       status.AcceptingNewWork,
-		RunningCount:           status.RunningCount,
-		MaxConcurrent:          status.MaxConcurrent,
-		ReconciledRunningJobs:  status.ReconciledRunningJobs,
-		LastReconciledAt:       status.LastReconciledAt,
-		PrunedRawListings:      status.PrunedRawListings,
-		LastPrunedAt:           status.LastPrunedAt,
-		PrunedAlertEvents:      status.PrunedAlertEvents,
-		LastAlertPrunedAt:      status.LastAlertPrunedAt,
+		AcceptingNewWork:      status.AcceptingNewWork,
+		RunningCount:          status.RunningCount,
+		MaxConcurrent:         status.MaxConcurrent,
+		FailedKeywords:        status.FailedKeywords,
+		LatestFailureMessage:  status.LatestFailureMessage,
+		LastFailureAt:         status.LastFailureAt,
+		ReconciledRunningJobs: status.ReconciledRunningJobs,
+		LastReconciledAt:      status.LastReconciledAt,
+		PrunedRawListings:     status.PrunedRawListings,
+		LastPrunedAt:          status.LastPrunedAt,
+		PrunedAlertEvents:     status.PrunedAlertEvents,
+		LastAlertPrunedAt:     status.LastAlertPrunedAt,
+	}, nil
+}
+
+func (a runtimeStatusAdapter) KeywordHealth(_ context.Context, keywordID string) (*dto.RuntimeKeywordHealth, error) {
+	status := a.source.KeywordRuntimeStatus(keywordID)
+	return &dto.RuntimeKeywordHealth{
+		Running:          status.Running,
+		LastSuccessAt:    status.LastSuccessAt,
+		LastErrorMessage: status.LastErrorMessage,
+		LastErrorAt:      status.LastErrorAt,
 	}, nil
 }
 
 type runtimeRunner interface {
 	RunRuntimeOnce(context.Context) (rtscheduler.RunResult, error)
+	ScanKeywordNow(context.Context, string) error
 }
 
 type runtimeTriggerAdapter struct {
-	run func(context.Context) (rtscheduler.RunResult, error)
+	run    func(context.Context) (rtscheduler.RunResult, error)
+	runNow func(context.Context, string) error
 }
 
 func newRuntimeTrigger(app runtimeRunner) runtimeTriggerAdapter {
-	return runtimeTriggerAdapter{run: app.RunRuntimeOnce}
+	return runtimeTriggerAdapter{
+		run:    app.RunRuntimeOnce,
+		runNow: app.ScanKeywordNow,
+	}
 }
 
 func (a runtimeTriggerAdapter) RunOnce(ctx context.Context) (tui.RuntimeRunResult, error) {
@@ -86,6 +106,26 @@ func (a runtimeTriggerAdapter) RunOnce(ctx context.Context) (tui.RuntimeRunResul
 		Started: result.Started,
 		Skipped: result.Skipped,
 	}, nil
+}
+
+func (a runtimeTriggerAdapter) ScanNow(ctx context.Context, keywordID string) error {
+	return a.runNow(ctx, keywordID)
+}
+
+type browserOpenerAdapter struct {
+	open func(context.Context, string) error
+}
+
+func newBrowserOpener() browserOpenerAdapter {
+	return browserOpenerAdapter{
+		open: func(ctx context.Context, url string) error {
+			return exec.CommandContext(ctx, "xdg-open", url).Start()
+		},
+	}
+}
+
+func (a browserOpenerAdapter) OpenURL(ctx context.Context, url string) error {
+	return a.open(ctx, url)
 }
 
 type keywordActionService interface {

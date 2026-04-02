@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -45,9 +46,11 @@ query SearchProductV5Query($params:String!){
 `
 
 type Tokopedia struct {
-	endpoint   string
-	rows       int
-	httpClient *http.Client
+	endpoint      string
+	rows          int
+	retryAttempts int
+	retryBackoff  time.Duration
+	httpClient    *http.Client
 }
 
 type graphQLRequest struct {
@@ -57,6 +60,38 @@ type graphQLRequest struct {
 }
 
 type searchEnvelope []struct {
+	Data struct {
+		SearchProductV5 struct {
+			Header struct {
+				ResponseCode int `json:"responseCode"`
+			} `json:"header"`
+			Data struct {
+				Products []searchProduct `json:"products"`
+			} `json:"data"`
+		} `json:"searchProductV5"`
+	} `json:"data"`
+	Errors []struct {
+		Message string `json:"message"`
+	} `json:"errors"`
+}
+
+type searchEnvelopeFallback struct {
+	Data struct {
+		SearchProductV5 struct {
+			Header struct {
+				ResponseCode int `json:"responseCode"`
+			} `json:"header"`
+			Data struct {
+				Products []searchProduct `json:"products"`
+			} `json:"data"`
+		} `json:"searchProductV5"`
+	} `json:"data"`
+	Errors []struct {
+		Message string `json:"message"`
+	} `json:"errors"`
+}
+
+type searchEnvelopeEntry struct {
 	Data struct {
 		SearchProductV5 struct {
 			Header struct {
@@ -95,9 +130,11 @@ func NewTokopedia(cfg config.ScraperConfig) *Tokopedia {
 
 func NewTokopediaWithHTTPClient(cfg config.ScraperConfig, httpClient *http.Client) *Tokopedia {
 	return &Tokopedia{
-		endpoint:   cfg.TokopediaSearchEndpoint,
-		rows:       cfg.RowsPerScan,
-		httpClient: httpClient,
+		endpoint:      cfg.TokopediaSearchEndpoint,
+		rows:          cfg.RowsPerScan,
+		retryAttempts: cfg.RetryAttempts,
+		retryBackoff:  time.Duration(cfg.RetryBackoffMillis) * time.Millisecond,
+		httpClient:    httpClient,
 	}
 }
 
@@ -112,29 +149,73 @@ func (t *Tokopedia) FetchListings(ctx context.Context, keyword domain.TrackedKey
 		return nil, err
 	}
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, t.endpoint, bytes.NewReader(payload))
+	body, err := t.doSearchRequest(ctx, query, payload)
 	if err != nil {
-		return nil, fmt.Errorf("create tokopedia search request: %w", err)
-	}
-
-	setTokopediaHeaders(req, query)
-
-	resp, err := t.httpClient.Do(req)
-	if err != nil {
-		return nil, fmt.Errorf("tokopedia search request failed: %w", err)
-	}
-	defer resp.Body.Close()
-
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return nil, fmt.Errorf("read tokopedia search response: %w", err)
-	}
-
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("unexpected tokopedia search status: %d", resp.StatusCode)
+		return nil, err
 	}
 
 	return parseTokopediaSearchResponse(body)
+}
+
+func (t *Tokopedia) doSearchRequest(ctx context.Context, query string, payload []byte) ([]byte, error) {
+	attempts := t.retryAttempts
+	if attempts <= 0 {
+		attempts = 1
+	}
+
+	backoff := t.retryBackoff
+	if backoff <= 0 {
+		backoff = 500 * time.Millisecond
+	}
+
+	var lastErr error
+	for attempt := 1; attempt <= attempts; attempt++ {
+		req, err := http.NewRequestWithContext(ctx, http.MethodPost, t.endpoint, bytes.NewReader(payload))
+		if err != nil {
+			return nil, fmt.Errorf("create tokopedia search request: %w", err)
+		}
+		setTokopediaHeaders(req, query)
+
+		resp, err := t.httpClient.Do(req)
+		if err != nil {
+			lastErr = fmt.Errorf("tokopedia search request failed: %w", err)
+			if attempt < attempts && isTransientRequestError(err) {
+				if sleepErr := sleepWithContext(ctx, backoff*time.Duration(attempt)); sleepErr != nil {
+					return nil, sleepErr
+				}
+				continue
+			}
+			return nil, lastErr
+		}
+
+		body, readErr := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		if readErr != nil {
+			lastErr = fmt.Errorf("read tokopedia search response: %w", readErr)
+			if attempt < attempts {
+				if sleepErr := sleepWithContext(ctx, backoff*time.Duration(attempt)); sleepErr != nil {
+					return nil, sleepErr
+				}
+				continue
+			}
+			return nil, lastErr
+		}
+
+		if resp.StatusCode == http.StatusOK {
+			return body, nil
+		}
+
+		lastErr = fmt.Errorf("unexpected tokopedia search status: %d", resp.StatusCode)
+		if attempt < attempts && isTransientHTTPStatus(resp.StatusCode) {
+			if sleepErr := sleepWithContext(ctx, backoff*time.Duration(attempt)); sleepErr != nil {
+				return nil, sleepErr
+			}
+			continue
+		}
+		return nil, lastErr
+	}
+
+	return nil, lastErr
 }
 
 func buildTokopediaSearchPayload(query string, rows int) ([]byte, error) {
@@ -177,23 +258,18 @@ func setTokopediaHeaders(req *http.Request, query string) {
 }
 
 func parseTokopediaSearchResponse(body []byte) ([]domain.RawListing, error) {
-	var envelope searchEnvelope
-	if err := json.Unmarshal(body, &envelope); err != nil {
-		return nil, fmt.Errorf("parse tokopedia search response: %w", err)
+	products, err := extractProducts(body)
+	if err != nil {
+		return nil, err
 	}
 
-	if len(envelope) == 0 {
-		return nil, fmt.Errorf("tokopedia search response is empty")
-	}
-
-	if len(envelope[0].Errors) > 0 {
-		return nil, fmt.Errorf("tokopedia graphql error: %s", envelope[0].Errors[0].Message)
-	}
-
-	products := envelope[0].Data.SearchProductV5.Data.Products
 	listings := make([]domain.RawListing, 0, len(products))
 	for _, product := range products {
-		price := firstPositive(product.Price.Number, parsePriceString(product.Price.Text))
+		price := firstPositive(
+			product.Price.Number,
+			parsePriceString(product.Price.Text),
+			parsePriceString(product.Price.Original),
+		)
 		if price <= 0 {
 			continue
 		}
@@ -201,20 +277,111 @@ func parseTokopediaSearchResponse(body []byte) ([]domain.RawListing, error) {
 		originalPrice := firstPositive(parsePriceString(product.Price.Original))
 		listing := domain.RawListing{
 			Source:     tokopediaSource,
-			Title:      strings.TrimSpace(product.Name),
+			Title:      firstNonEmpty(strings.TrimSpace(product.Name), strings.TrimSpace(product.URL)),
 			SellerName: strings.TrimSpace(product.Shop.Name),
 			Price:      price,
-			IsPromo:    product.Price.DiscountPercentage > 0 || originalPrice > price,
+			IsPromo:    product.Price.DiscountPercentage > 0 || (originalPrice > 0 && originalPrice > price),
 			URL:        normalizeTokopediaURL(product.URL),
 		}
-		if originalPrice > 0 {
+		if originalPrice > 0 && originalPrice > price {
 			listing.OriginalPrice = &originalPrice
+		}
+
+		if listing.Title == "" || listing.URL == "" {
+			continue
 		}
 
 		listings = append(listings, listing)
 	}
 
 	return listings, nil
+}
+
+func extractProducts(body []byte) ([]searchProduct, error) {
+	var entries []searchEnvelopeEntry
+	if err := json.Unmarshal(body, &entries); err != nil {
+		return extractProductsFallback(body)
+	}
+
+	products, err := extractProductsFromEntries(entries)
+	if err == nil {
+		return products, nil
+	}
+
+	return extractProductsFallback(body)
+}
+
+func extractProductsFallback(body []byte) ([]searchProduct, error) {
+	var fallback searchEnvelopeFallback
+	if err := json.Unmarshal(body, &fallback); err == nil {
+		products, ok, extractErr := extractProductsFromEntry(searchEnvelopeEntry(fallback))
+		if extractErr != nil {
+			return nil, extractErr
+		}
+		if ok {
+			return products, nil
+		}
+		return nil, fmt.Errorf("tokopedia search response is empty")
+	}
+
+	return nil, fmt.Errorf("parse tokopedia search response")
+}
+
+func extractProductsFromEntries(entries []searchEnvelopeEntry) ([]searchProduct, error) {
+	if len(entries) == 0 {
+		return nil, fmt.Errorf("tokopedia search response is empty")
+	}
+
+	for _, entry := range entries {
+		products, ok, err := extractProductsFromEntry(entry)
+		if err != nil {
+			return nil, err
+		}
+		if ok {
+			return products, nil
+		}
+	}
+
+	return nil, fmt.Errorf("tokopedia search response is empty")
+}
+
+func extractProductsFromEntry(entry searchEnvelopeEntry) ([]searchProduct, bool, error) {
+	if len(entry.Errors) > 0 {
+		return nil, false, fmt.Errorf("tokopedia graphql error: %s", entry.Errors[0].Message)
+	}
+
+	products := entry.Data.SearchProductV5.Data.Products
+	if products != nil {
+		return products, true, nil
+	}
+
+	return nil, false, nil
+}
+
+func isTransientHTTPStatus(statusCode int) bool {
+	return statusCode == http.StatusTooManyRequests || statusCode >= 500
+}
+
+func isTransientRequestError(err error) bool {
+	if err == nil {
+		return false
+	}
+	if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) {
+		return false
+	}
+	return true
+}
+
+func sleepWithContext(ctx context.Context, duration time.Duration) error {
+	timer := time.NewTimer(duration)
+	defer timer.Stop()
+
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-timer.C:
+		return nil
+	}
 }
 
 func normalizeTokopediaURL(value string) string {
@@ -257,4 +424,13 @@ func firstPositive(values ...int64) int64 {
 		}
 	}
 	return 0
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, value := range values {
+		if value != "" {
+			return value
+		}
+	}
+	return ""
 }

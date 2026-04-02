@@ -2,8 +2,6 @@
 -- Phase 1 foundation: minimum practical persistence for tracked keywords,
 -- scan jobs, raw/grouped listings, market snapshots, and alert events.
 
--- Up
-
 CREATE TABLE tracked_keywords (
     id CHAR(26) NOT NULL,
     keyword VARCHAR(255) NOT NULL,
@@ -81,7 +79,7 @@ CREATE TABLE market_snapshots (
     max_price BIGINT NULL,
     raw_count INT NOT NULL,
     grouped_count INT NOT NULL,
-    signal VARCHAR(20) NOT NULL,
+    `signal` VARCHAR(20) NOT NULL,
     snapshot_at DATETIME NOT NULL,
     PRIMARY KEY (id),
     UNIQUE KEY uq_market_snapshots_scan_job_id (scan_job_id),
@@ -114,12 +112,3 @@ CREATE TABLE alert_events (
         FOREIGN KEY (scan_job_id) REFERENCES scan_jobs (id)
         ON DELETE SET NULL
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
-
--- Down
-
-DROP TABLE IF EXISTS alert_events;
-DROP TABLE IF EXISTS market_snapshots;
-DROP TABLE IF EXISTS grouped_listings;
-DROP TABLE IF EXISTS raw_listings;
-DROP TABLE IF EXISTS scan_jobs;
-DROP TABLE IF EXISTS tracked_keywords;
