@@ -7,18 +7,31 @@ import (
 )
 
 const (
-	defaultAppName       = "pricealert"
-	defaultRuntimeTZ     = "UTC"
-	defaultLogLevel      = "info"
-	defaultMinInterval   = 5
-	defaultMaxConcurrent = 1
+	defaultAppName                 = "pricealert"
+	defaultRuntimeTZ               = "UTC"
+	defaultLogLevel                = "info"
+	defaultMinInterval             = 5
+	defaultMaxConcurrent           = 1
+	defaultDBDriver                = "mysql"
+	defaultMigrationsDir           = "migrations"
+	defaultScraperRows             = 10
+	defaultScraperTimeoutSeconds   = 20
+	defaultTokopediaSearchEndpoint = "https://gql.tokopedia.com/graphql/SearchProductV5Query"
+	defaultTelegramAPIBaseURL      = "https://api.telegram.org"
+	defaultTelegramTimeoutSeconds  = 10
+	defaultRawListingRetentionHrs  = 24 * 14
+	defaultAlertEventRetentionHrs  = 24 * 30
 )
 
 // Config holds runtime configuration for the single-process v1 application.
 type Config struct {
-	AppName string
-	Runtime RuntimeConfig
-	DB      DBConfig
+	AppName   string
+	Runtime   RuntimeConfig
+	DB        DBConfig
+	Paths     PathsConfig
+	Scraper   ScraperConfig
+	Telegram  TelegramConfig
+	Retention RetentionConfig
 }
 
 type RuntimeConfig struct {
@@ -29,12 +42,35 @@ type RuntimeConfig struct {
 }
 
 type DBConfig struct {
+	Driver   string
 	Host     string
 	Port     int
 	User     string
 	Password string
 	Name     string
 	Params   string
+}
+
+type PathsConfig struct {
+	MigrationsDir string
+}
+
+type ScraperConfig struct {
+	TokopediaSearchEndpoint string
+	TimeoutSeconds          int
+	RowsPerScan             int
+}
+
+type TelegramConfig struct {
+	BotToken       string
+	ChatID         string
+	APIBaseURL     string
+	TimeoutSeconds int
+}
+
+type RetentionConfig struct {
+	RawListingsHours int
+	AlertEventsHours int
 }
 
 // Load reads configuration from environment variables and applies safe defaults
@@ -55,6 +91,31 @@ func Load() (Config, error) {
 		return Config{}, err
 	}
 
+	scraperTimeoutSeconds, err := getEnvInt("PRICEALERT_SCRAPER_TIMEOUT_SECONDS", defaultScraperTimeoutSeconds)
+	if err != nil {
+		return Config{}, err
+	}
+
+	scraperRows, err := getEnvInt("PRICEALERT_SCRAPER_ROWS_PER_SCAN", defaultScraperRows)
+	if err != nil {
+		return Config{}, err
+	}
+
+	telegramTimeoutSeconds, err := getEnvInt("PRICEALERT_TELEGRAM_TIMEOUT_SECONDS", defaultTelegramTimeoutSeconds)
+	if err != nil {
+		return Config{}, err
+	}
+
+	rawListingRetentionHours, err := getEnvInt("PRICEALERT_RAW_LISTING_RETENTION_HOURS", defaultRawListingRetentionHrs)
+	if err != nil {
+		return Config{}, err
+	}
+
+	alertEventRetentionHours, err := getEnvInt("PRICEALERT_ALERT_EVENT_RETENTION_HOURS", defaultAlertEventRetentionHrs)
+	if err != nil {
+		return Config{}, err
+	}
+
 	cfg := Config{
 		AppName: getEnv("PRICEALERT_APP_NAME", defaultAppName),
 		Runtime: RuntimeConfig{
@@ -64,12 +125,31 @@ func Load() (Config, error) {
 			MaxConcurrentScans:  maxConcurrentScans,
 		},
 		DB: DBConfig{
+			Driver:   getEnv("PRICEALERT_DB_DRIVER", defaultDBDriver),
 			Host:     getEnv("PRICEALERT_DB_HOST", "127.0.0.1"),
 			Port:     dbPort,
 			User:     getEnv("PRICEALERT_DB_USER", "root"),
 			Password: getEnv("PRICEALERT_DB_PASSWORD", ""),
 			Name:     getEnv("PRICEALERT_DB_NAME", "pricealert"),
 			Params:   getEnv("PRICEALERT_DB_PARAMS", "parseTime=true&charset=utf8mb4&loc=UTC"),
+		},
+		Paths: PathsConfig{
+			MigrationsDir: getEnv("PRICEALERT_MIGRATIONS_DIR", defaultMigrationsDir),
+		},
+		Scraper: ScraperConfig{
+			TokopediaSearchEndpoint: getEnv("PRICEALERT_TOKOPEDIA_SEARCH_ENDPOINT", defaultTokopediaSearchEndpoint),
+			TimeoutSeconds:          scraperTimeoutSeconds,
+			RowsPerScan:             scraperRows,
+		},
+		Telegram: TelegramConfig{
+			BotToken:       getEnv("PRICEALERT_TELEGRAM_BOT_TOKEN", ""),
+			ChatID:         getEnv("PRICEALERT_TELEGRAM_CHAT_ID", ""),
+			APIBaseURL:     getEnv("PRICEALERT_TELEGRAM_API_BASE_URL", defaultTelegramAPIBaseURL),
+			TimeoutSeconds: telegramTimeoutSeconds,
+		},
+		Retention: RetentionConfig{
+			RawListingsHours: rawListingRetentionHours,
+			AlertEventsHours: alertEventRetentionHours,
 		},
 	}
 
@@ -93,8 +173,43 @@ func (c Config) Validate() error {
 		return fmt.Errorf("db port must be between 1 and 65535")
 	}
 
-	if c.DB.Host == "" || c.DB.User == "" || c.DB.Name == "" {
-		return fmt.Errorf("db host, user, and name are required")
+	if c.DB.Driver == "" || c.DB.Host == "" || c.DB.User == "" || c.DB.Name == "" {
+		return fmt.Errorf("db driver, host, user, and name are required")
+	}
+
+	if c.Paths.MigrationsDir == "" {
+		return fmt.Errorf("migrations dir is required")
+	}
+
+	if c.Scraper.TokopediaSearchEndpoint == "" {
+		return fmt.Errorf("tokopedia search endpoint is required")
+	}
+
+	if c.Scraper.TimeoutSeconds <= 0 {
+		return fmt.Errorf("scraper timeout seconds must be > 0")
+	}
+
+	if c.Scraper.RowsPerScan <= 0 {
+		return fmt.Errorf("scraper rows per scan must be > 0")
+	}
+
+	if c.Telegram.TimeoutSeconds <= 0 {
+		return fmt.Errorf("telegram timeout seconds must be > 0")
+	}
+
+	if (c.Telegram.BotToken == "") != (c.Telegram.ChatID == "") {
+		return fmt.Errorf("telegram bot token and chat id must both be set or both be empty")
+	}
+
+	if c.Telegram.BotToken != "" && c.Telegram.APIBaseURL == "" {
+		return fmt.Errorf("telegram api base url is required when telegram is configured")
+	}
+
+	if c.Retention.RawListingsHours < 0 {
+		return fmt.Errorf("raw listing retention hours must be >= 0")
+	}
+	if c.Retention.AlertEventsHours < 0 {
+		return fmt.Errorf("alert event retention hours must be >= 0")
 	}
 
 	return nil

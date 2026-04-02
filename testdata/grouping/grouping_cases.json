@@ -1,0 +1,160 @@
+[
+  {
+    "name": "obvious near duplicates group together",
+    "scan_job_id": "scan_dup",
+    "listings": [
+      {
+        "id": "raw_1",
+        "title": "Bimoli Minyak Goreng 2L Promo",
+        "seller_name": "Seller A",
+        "price": 28000,
+        "is_promo": true,
+        "url": "https://example.com/1"
+      },
+      {
+        "id": "raw_2",
+        "title": "MINYAK GORENG BIMOLI 2 Liter",
+        "seller_name": "Seller B",
+        "price": 28500,
+        "is_promo": false,
+        "url": "https://example.com/2"
+      },
+      {
+        "id": "raw_3",
+        "title": "Bimoli minyak goreng 2L original ready stock",
+        "seller_name": "Seller C",
+        "price": 27900,
+        "is_promo": false,
+        "url": "https://example.com/3"
+      }
+    ],
+    "want_group_count": 1,
+    "want_listing_counts": [3],
+    "want_best_prices": [27900]
+  },
+  {
+    "name": "size mismatch stays separate",
+    "scan_job_id": "scan_size",
+    "listings": [
+      {
+        "id": "raw_1",
+        "title": "Bimoli Minyak Goreng 1L",
+        "seller_name": "Seller A",
+        "price": 16000,
+        "is_promo": false,
+        "url": "https://example.com/1"
+      },
+      {
+        "id": "raw_2",
+        "title": "Bimoli Minyak Goreng 2L",
+        "seller_name": "Seller B",
+        "price": 30000,
+        "is_promo": false,
+        "url": "https://example.com/2"
+      }
+    ],
+    "want_group_count": 2,
+    "want_listing_counts": [1, 1],
+    "want_best_prices": [16000, 30000]
+  },
+  {
+    "name": "bundle mismatch stays separate",
+    "scan_job_id": "scan_bundle",
+    "listings": [
+      {
+        "id": "raw_1",
+        "title": "Bimoli Minyak Goreng 2L",
+        "seller_name": "Seller A",
+        "price": 30000,
+        "is_promo": false,
+        "url": "https://example.com/1"
+      },
+      {
+        "id": "raw_2",
+        "title": "Bimoli Minyak Goreng 2x1L",
+        "seller_name": "Seller B",
+        "price": 30500,
+        "is_promo": false,
+        "url": "https://example.com/2"
+      }
+    ],
+    "want_group_count": 2,
+    "want_listing_counts": [1, 1],
+    "want_best_prices": [30000, 30500]
+  },
+  {
+    "name": "packaging mismatch stays separate",
+    "scan_job_id": "scan_packaging",
+    "listings": [
+      {
+        "id": "raw_1",
+        "title": "Bimoli Minyak Goreng 2L Refill",
+        "seller_name": "Seller A",
+        "price": 28500,
+        "is_promo": false,
+        "url": "https://example.com/1"
+      },
+      {
+        "id": "raw_2",
+        "title": "Bimoli Minyak Goreng 2L Botol",
+        "seller_name": "Seller B",
+        "price": 32000,
+        "is_promo": false,
+        "url": "https://example.com/2"
+      }
+    ],
+    "want_group_count": 2,
+    "want_listing_counts": [1, 1],
+    "want_best_prices": [28500, 32000]
+  },
+  {
+    "name": "brand mismatch stays separate",
+    "scan_job_id": "scan_brand",
+    "listings": [
+      {
+        "id": "raw_1",
+        "title": "Bimoli Minyak Goreng 2L",
+        "seller_name": "Seller A",
+        "price": 28000,
+        "is_promo": false,
+        "url": "https://example.com/1"
+      },
+      {
+        "id": "raw_2",
+        "title": "Filma Minyak Goreng 2L",
+        "seller_name": "Seller B",
+        "price": 27900,
+        "is_promo": false,
+        "url": "https://example.com/2"
+      }
+    ],
+    "want_group_count": 2,
+    "want_listing_counts": [1, 1],
+    "want_best_prices": [27900, 28000]
+  },
+  {
+    "name": "large price gap avoids grouping",
+    "scan_job_id": "scan_price_gap",
+    "listings": [
+      {
+        "id": "raw_1",
+        "title": "Bimoli Minyak Goreng 2L",
+        "seller_name": "Seller A",
+        "price": 28000,
+        "is_promo": false,
+        "url": "https://example.com/1"
+      },
+      {
+        "id": "raw_2",
+        "title": "Bimoli Minyak Goreng 2L",
+        "seller_name": "Seller B",
+        "price": 65000,
+        "is_promo": false,
+        "url": "https://example.com/2"
+      }
+    ],
+    "want_group_count": 2,
+    "want_listing_counts": [1, 1],
+    "want_best_prices": [28000, 65000]
+  }
+]

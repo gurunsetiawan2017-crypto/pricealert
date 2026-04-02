@@ -45,6 +45,36 @@ So the implementation should validate the data pipeline first.
 
 ---
 
+## Current Implementation Snapshot
+
+The active development branch has already moved beyond the early skeleton phases.
+
+Implemented foundation areas:
+- MariaDB bootstrap, migrations, and repositories
+- domain models and enums
+- grouping engine with fixtures/tests
+- snapshot/history logic
+- alert logic with anti-spam foundations
+- scan orchestration
+- Tokopedia scraper feasibility adapter
+- runtime scheduler/worker foundation and app wiring
+- DTO/query layer
+- Bubble Tea TUI skeleton with dashboard/detail and keyword management flows
+- Telegram notifier foundation
+- startup reconciliation and startup-bounded retention maintenance
+
+Still intentionally incomplete or still evolving:
+- scraper robustness beyond the current feasibility adapter
+- broader operational polish and observability
+- additional maintenance/hardening passes
+- future API/web delivery layers
+
+This means the phase list below should now be read as:
+- implementation order and architectural intent
+- plus a checklist for gaps and hardening work that remain
+
+---
+
 ## Phase 0 — Project Foundation
 
 ### Goal
@@ -371,7 +401,7 @@ Add the first usable terminal experience once the data pipeline is already meani
 - implement dashboard screen
 - implement keyword selection behavior
 - implement detail screen
-- implement add/edit/delete flows
+- implement add/edit/archive flows
 - implement log panel rendering
 - implement refresh action wiring
 
@@ -430,6 +460,16 @@ Make the app less fragile and more comfortable after the main flow already works
 
 ### Expected outcome
 The first usable version becomes more trustworthy and maintainable.
+
+### Current branch note
+Much of this phase is already partially implemented, including:
+- bounded TUI refresh behavior
+- startup reconciliation for abandoned running scan jobs
+- startup pruning for `raw_listings`
+- startup pruning for `alert_events`
+- lightweight runtime status surfacing into query/TUI
+
+Remaining work in this phase is mostly iterative hardening rather than first implementation.
 
 ---
 
@@ -510,7 +550,7 @@ Tracked keywords can monitor over time in one process without duplicated scan ov
 Includes:
 - dashboard
 - detail screen
-- add/edit/delete keyword flow
+- add/edit/archive keyword flow
 - live log rendering
 
 ### Success criteria
@@ -526,6 +566,21 @@ Includes:
 
 ### Success criteria
 Useful buying alerts arrive outside the terminal.
+
+---
+
+## Current Branch Milestone Mapping
+
+Approximate current state of the active branch:
+
+- Milestone A — largely implemented
+- Milestone B — implemented in foundation form
+- Milestone C — implemented in foundation form
+- Milestone D — implemented in foundation form
+- Milestone E — implemented in foundation form
+
+The remaining focus is not major missing layers anymore.
+It is mainly hardening, maintenance clarity, and operational refinement.
 
 ---
 

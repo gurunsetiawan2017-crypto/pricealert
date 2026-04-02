@@ -113,14 +113,16 @@ Use explicit booleans, such as:
 Primary JSON contracts for v1:
 
 1. TrackedKeyword JSON
-2. GroupedListing JSON
-3. MarketSnapshot JSON
-4. AlertEvent JSON
-5. PricePoint JSON
-6. KeywordDetail JSON
-7. DashboardState JSON
-8. WorkerScanResult JSON
-9. TelegramAlertPayload JSON
+2. TrackedKeywordSummary JSON
+3. GroupedListing JSON
+4. MarketSnapshot JSON
+5. AlertEvent JSON
+6. PricePoint JSON
+7. KeywordDetail JSON
+8. DashboardState JSON
+9. RuntimeStatusSummary JSON
+10. WorkerScanResult JSON
+11. TelegramAlertPayload JSON
 
 ---
 
@@ -152,7 +154,29 @@ Used for tracking configuration views, keyword lists, and detail headers.
 
 ---
 
-## 2. GroupedListing JSON
+## 2. TrackedKeywordSummary JSON
+
+### Purpose
+Used for lightweight keyword lists where full configuration detail is unnecessary.
+
+### Shape
+
+```json
+{
+  "id": "kw_001",
+  "keyword": "minyak goreng 2L",
+  "status": "active",
+  "has_new_alert": true
+}
+```
+
+### Notes
+- this is the summary shape used by the dashboard keyword list.
+- it is intentionally lighter than full `TrackedKeyword JSON`.
+
+---
+
+## 3. GroupedListing JSON
 
 ### Purpose
 Used for top deals, detail views, and grouped result output.
@@ -179,7 +203,7 @@ Used for top deals, detail views, and grouped result output.
 
 ---
 
-## 3. MarketSnapshot JSON
+## 4. MarketSnapshot JSON
 
 ### Purpose
 Used as the main summary object for one tracked keyword at one point in time.
@@ -207,7 +231,7 @@ Used as the main summary object for one tracked keyword at one point in time.
 
 ---
 
-## 4. AlertEvent JSON
+## 5. AlertEvent JSON
 
 ### Purpose
 Used for activity log, notifications, event history, and alert delivery status.
@@ -235,7 +259,7 @@ Used for activity log, notifications, event history, and alert delivery status.
 
 ---
 
-## 5. PricePoint JSON
+## 6. PricePoint JSON
 
 ### Purpose
 Used for recent history and trend displays.
@@ -260,7 +284,7 @@ Used for recent history and trend displays.
 
 ---
 
-## 6. KeywordDetail JSON
+## 7. KeywordDetail JSON
 
 ### Purpose
 Used for the TUI detail screen and future web detail page.
@@ -356,7 +380,7 @@ Used for the TUI detail screen and future web detail page.
 
 ---
 
-## 7. DashboardState JSON
+## 8. DashboardState JSON
 
 ### Purpose
 Used for the TUI main dashboard and future dashboard API/page.
@@ -417,17 +441,56 @@ Used for the TUI main dashboard and future dashboard API/page.
       "sent_to_telegram": true,
       "created_at": "2026-04-02T10:41:00+07:00"
     }
-  ]
+  ],
+  "runtime_status": {
+    "accepting_new_work": true,
+    "running_count": 1,
+    "max_concurrent": 2,
+    "reconciled_running_jobs": 1,
+    "last_reconciled_at": "2026-04-02T10:39:55+07:00",
+    "pruned_raw_listings": 9,
+    "last_pruned_at": "2026-04-02T10:39:55+07:00",
+    "pruned_alert_events": 5,
+    "last_alert_pruned_at": "2026-04-02T10:39:55+07:00"
+  }
 }
 ```
 
 ### Notes
 - `tracked_keywords` here is intentionally a lighter summary shape, not full TrackedKeyword JSON.
 - this contract is optimized for dashboard rendering speed and clarity.
+- `runtime_status` may be `null` if runtime status is unavailable in a given app context.
 
 ---
 
-## 8. WorkerScanResult JSON
+## 9. RuntimeStatusSummary JSON
+
+### Purpose
+Used to surface lightweight operational/runtime state to dashboard consumers without exposing runtime internals directly.
+
+### Shape
+
+```json
+{
+  "accepting_new_work": true,
+  "running_count": 1,
+  "max_concurrent": 2,
+  "reconciled_running_jobs": 1,
+  "last_reconciled_at": "2026-04-02T10:39:55+07:00",
+  "pruned_raw_listings": 9,
+  "last_pruned_at": "2026-04-02T10:39:55+07:00",
+  "pruned_alert_events": 5,
+  "last_alert_pruned_at": "2026-04-02T10:39:55+07:00"
+}
+```
+
+### Notes
+- this is intentionally a concise operational summary, not a monitoring framework payload.
+- startup maintenance outcomes are surfaced here because they are useful for local debugging and user trust.
+
+---
+
+## 10. WorkerScanResult JSON
 
 ### Purpose
 Used internally between worker, application layer, and persistence boundary.
@@ -510,7 +573,7 @@ Used internally between worker, application layer, and persistence boundary.
 
 ---
 
-## 9. TelegramAlertPayload JSON
+## 11. TelegramAlertPayload JSON
 
 ### Purpose
 Used as a formatting boundary between alert generation and Telegram delivery.
@@ -546,17 +609,6 @@ Used as a formatting boundary between alert generation and Telegram delivery.
 
 Some screens do not need full entity payloads.
 
-### TrackedKeywordSummary JSON
-
-```json
-{
-  "id": "kw_001",
-  "keyword": "minyak goreng 2L",
-  "status": "active",
-  "has_new_alert": true
-}
-```
-
 ### GroupedListingSummary JSON
 
 ```json
@@ -589,6 +641,7 @@ Examples:
 - `selected_keyword_id`
 - `top_deals`
 - `recent_events`
+- `runtime_status`
 
 ### Renderer-only fields
 Should not be stored in contracts.
@@ -608,6 +661,7 @@ These should be kept relatively stable once implementation starts:
 - AlertEvent JSON
 - KeywordDetail JSON
 - DashboardState JSON
+- RuntimeStatusSummary JSON
 
 ### Flexible internal contracts
 These can evolve more freely in early development:

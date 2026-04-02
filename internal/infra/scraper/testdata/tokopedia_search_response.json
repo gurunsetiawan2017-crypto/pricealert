@@ -1,0 +1,41 @@
+[
+  {
+    "data": {
+      "searchProductV5": {
+        "header": {
+          "responseCode": 0
+        },
+        "data": {
+          "products": [
+            {
+              "name": "Mouse Genius Wireless NX 7005",
+              "url": "https://www.tokopedia.com/geniusofficial/mouse-genius-wireless-nx-7005-ocean-blue-3d1f1?extParam=src%3Dsearch",
+              "shop": {
+                "name": "Indonesia Genius"
+              },
+              "price": {
+                "text": "Rp118.990",
+                "number": 118990,
+                "original": "Rp130.000",
+                "discountPercentage": 8
+              }
+            },
+            {
+              "name": "Mouse Genius Wireless NX 7005 Promo",
+              "url": "/sabang-computer/mouse-genius-wireless-nx-7005",
+              "shop": {
+                "name": "Sabang Computer"
+              },
+              "price": {
+                "text": "Rp103.000",
+                "number": 103000,
+                "original": "",
+                "discountPercentage": 0
+              }
+            }
+          ]
+        }
+      }
+    }
+  }
+]
